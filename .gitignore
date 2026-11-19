@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv
+venv/
+ENV/
+
+# Environment Variables
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# SQLite Database & Sandboxes
+data/*.db
+data/sandboxes/
+
+# IDE & OS
+.vscode/
+.idea/
+.claude
+.DS_Store
+Thumbs.db
+*.swp
+CLAUDE.md
+.claudeignore
+
+# Node & Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
