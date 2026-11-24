@@ -247,7 +247,7 @@ export default function OpportunitiesPage() {
         onClose={() => setIsRefinementOpen(false)}
         sessionId={selectedSessionId}
         currentOpportunities={opportunities}
-        onApplyRefinement={(newOpps) => {
+        onOpportunitiesUpdated={(newOpps: ProblemOpportunity[]) => {
           setOpportunities(newOpps);
         }}
       />
@@ -257,8 +257,10 @@ export default function OpportunitiesPage() {
         <StackModal
           isOpen={Boolean(selectedOppForStack)}
           onClose={() => setSelectedOppForStack(null)}
-          opportunityTitle={selectedOppForStack.title}
-          onConfirm={handleCustomStackBuild}
+          opportunity={selectedOppForStack}
+          onConfirmBuild={async (_opp, stack) => {
+            await handleCustomStackBuild(stack);
+          }}
         />
       )}
     </div>

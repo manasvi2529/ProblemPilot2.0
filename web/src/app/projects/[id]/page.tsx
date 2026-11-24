@@ -34,6 +34,17 @@ import {
   FlaskConical,
   Play,
   XCircle,
+  Square,
+  RotateCw,
+  Monitor,
+  Tablet,
+  Smartphone,
+  Maximize2,
+  Bug,
+  Wrench,
+  Undo2,
+  Activity,
+  Eye,
 } from 'lucide-react';
 
 export default function ProjectDetailsPage() {
@@ -46,7 +57,38 @@ export default function ProjectDetailsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionResult, setActionResult] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'copilot' | 'blueprint' | 'files' | 'test' | 'teaching'>('copilot');
+  const [activeTab, setActiveTab] = useState<'preview' | 'copilot' | 'blueprint' | 'files' | 'test' | 'terminal' | 'teaching'>('preview');
+
+  // Preview & Live Sandbox State
+  const [previewStatus, setPreviewStatus] = useState<'not_started' | 'starting' | 'running' | 'failed' | 'stopped'>('not_started');
+  const [previewPort, setPreviewPort] = useState<number | null>(null);
+  const [previewPid, setPreviewPid] = useState<number | null>(null);
+  const [previewUptime, setPreviewUptime] = useState<number>(0);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewLogs, setPreviewLogs] = useState<string[]>([]);
+  const [previewViewport, setPreviewViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
+  const [previewKey, setPreviewKey] = useState(0);
+  const [isStartingPreview, setIsStartingPreview] = useState(false);
+  const [liveTestResults, setLiveTestResults] = useState<{
+    passed: boolean;
+    checks: Array<{ name: string; passed: boolean; detail: string }>;
+    total_checks: number;
+    passed_checks: number;
+  } | null>(null);
+  const [liveTesting, setLiveTesting] = useState(false);
+
+  // AI-Assisted Debugger State
+  const [aiDiagnosis, setAiDiagnosis] = useState<{
+    summary: string;
+    root_cause: string;
+    file: string;
+    original_snippet: string;
+    replacement_snippet: string;
+    explanation_of_fix: string;
+  } | null>(null);
+  const [diagnosing, setDiagnosing] = useState(false);
+  const [applyingFix, setApplyingFix] = useState(false);
+  const [fixMessage, setFixMessage] = useState<string | null>(null);
 
   // Test and Verification State
   const [testResults, setTestResults] = useState<{
@@ -71,6 +113,13 @@ export default function ProjectDetailsPage() {
   const [pendingTechStack, setPendingTechStack] = useState<Record<string, any> | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
+  // Iterative Modification & Snapshot State
+  const [pendingChangePlan, setPendingChangePlan] = useState<any>(null);
+  const [changeHistory, setChangeHistory] = useState<any[]>([]);
+  const [isApplyingChange, setIsApplyingChange] = useState(false);
+  const [isRollingBack, setIsRollingBack] = useState(false);
+  const [changeSuccessMessage, setChangeSuccessMessage] = useState<string | null>(null);
+
   // Teaching State
   const [teachTopic, setTeachTopic] = useState('System Architecture & Trade-offs');
   const [teachLevel, setTeachLevel] = useState('interview_prep');
@@ -93,6 +142,7 @@ export default function ProjectDetailsPage() {
       if (p.blueprint) {
         setBlueprint(p.blueprint);
       }
+      loadChangeHistory();
       if (chatMessages.length === 0) {
         // Initialize welcoming Copilot message
         setChatMessages([
@@ -117,9 +167,157 @@ export default function ProjectDetailsPage() {
     }
   };
 
+  const loadPreviewStatus = async () => {
+    try {
+      const st = await api.getProjectPreviewStatus(projectId);
+      setPreviewStatus(st.status);
+      setPreviewPort(st.port);
+      setPreviewPid(st.pid);
+      if (st.uptime_seconds) setPreviewUptime(st.uptime_seconds);
+      if (st.error_message) setPreviewError(st.error_message);
+
+      const logData = await api.getProjectPreviewLogs(projectId, 100);
+      setPreviewLogs(logData.logs || []);
+      return st;
+    } catch (e) {
+      // Ignored if unauthenticated or network error
+    }
+  };
+
   useEffect(() => {
     loadData();
+    loadPreviewStatus();
   }, [projectId]);
+
+  useEffect(() => {
+    if (previewStatus !== 'running' && previewStatus !== 'starting') return;
+    const interval = setInterval(async () => {
+      await loadPreviewStatus();
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [previewStatus, projectId]);
+
+  const handleStartServer = async () => {
+    setIsStartingPreview(true);
+    setPreviewError(null);
+    try {
+      const res = await api.startProjectPreview(projectId);
+      if (res.success) {
+        setPreviewStatus('running');
+        setPreviewPort(res.port);
+        setPreviewPid(res.pid);
+        setPreviewKey((k) => k + 1);
+        setActiveTab('preview');
+        await loadPreviewStatus();
+      } else {
+        setPreviewStatus('failed');
+        setPreviewError(res.error || 'Server startup failed.');
+        await loadPreviewStatus();
+      }
+    } catch (err: any) {
+      setPreviewStatus('failed');
+      setPreviewError(err.message || 'Failed to communicate with preview engine.');
+    } finally {
+      setIsStartingPreview(false);
+    }
+  };
+
+  const handleStopServer = async () => {
+    try {
+      await api.stopProjectPreview(projectId);
+      setPreviewStatus('stopped');
+      await loadPreviewStatus();
+    } catch (err: any) {
+      alert(`Stop failed: ${err.message}`);
+    }
+  };
+
+  const handleRestartServer = async () => {
+    setIsStartingPreview(true);
+    setPreviewError(null);
+    try {
+      const res = await api.restartProjectPreview(projectId);
+      if (res.success) {
+        setPreviewStatus('running');
+        setPreviewPort(res.port);
+        setPreviewKey((k) => k + 1);
+        await loadPreviewStatus();
+      } else {
+        setPreviewStatus('failed');
+        setPreviewError(res.error || 'Restart failed.');
+      }
+    } catch (err: any) {
+      setPreviewStatus('failed');
+      setPreviewError(err.message);
+    } finally {
+      setIsStartingPreview(false);
+    }
+  };
+
+  const handleRunLiveTest = async () => {
+    setLiveTesting(true);
+    try {
+      const res = await api.testProjectLive(projectId);
+      setLiveTestResults(res);
+      await loadPreviewStatus();
+    } catch (err: any) {
+      alert(`Live test failed: ${err.message}`);
+    } finally {
+      setLiveTesting(false);
+    }
+  };
+
+  const handleDiagnoseError = async () => {
+    setDiagnosing(true);
+    setFixMessage(null);
+    try {
+      const res = await api.diagnoseProjectError(projectId);
+      setAiDiagnosis(res);
+    } catch (err: any) {
+      alert(`AI Diagnosis failed: ${err.message}`);
+    } finally {
+      setDiagnosing(false);
+    }
+  };
+
+  const handleApplyFix = async () => {
+    if (!aiDiagnosis) return;
+    setApplyingFix(true);
+    try {
+      const res = await api.applyProjectFix(
+        projectId,
+        aiDiagnosis.file,
+        aiDiagnosis.original_snippet,
+        aiDiagnosis.replacement_snippet
+      );
+      if (res.success) {
+        setFixMessage('Targeted fix applied! Restarting sandbox...');
+        setAiDiagnosis(null);
+        await handleRestartServer();
+      } else {
+        alert(`Fix could not be applied: ${res.message}`);
+      }
+    } catch (err: any) {
+      alert(`Failed to apply fix: ${err.message}`);
+    } finally {
+      setApplyingFix(false);
+    }
+  };
+
+  const handleRollbackFix = async () => {
+    if (!aiDiagnosis) return;
+    try {
+      const res = await api.rollbackProjectFix(projectId, aiDiagnosis.file);
+      if (res.success) {
+        alert(res.message);
+        await handleRestartServer();
+      } else {
+        alert(`Rollback failed: ${res.message}`);
+      }
+    } catch (err: any) {
+      alert(`Rollback failed: ${err.message}`);
+    }
+  };
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -176,6 +374,9 @@ export default function ProjectDetailsPage() {
 
       if (res.suggested_tech_stack) {
         setPendingTechStack(res.suggested_tech_stack);
+      }
+      if (res.change_plan) {
+        setPendingChangePlan(res.change_plan);
       }
 
       const botMsg: ChatMessage = {
@@ -237,6 +438,115 @@ export default function ProjectDetailsPage() {
       }
     } catch (err: any) {
       alert(`Could not synthesize tech stack: ${err.message}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const loadChangeHistory = async () => {
+    try {
+      const res = await api.getProjectChangeHistory(projectId);
+      setChangeHistory(res.history || []);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleApproveChangePlan = async () => {
+    if (!pendingChangePlan) return;
+    setIsApplyingChange(true);
+    setChangeSuccessMessage(null);
+    try {
+      const res = await api.applyProjectChange(projectId, pendingChangePlan.plan_id, true, pendingChangePlan);
+      if (res.success) {
+        setChangeSuccessMessage(res.message || 'Changes applied successfully!');
+        setPreviewKey((k) => k + 1);
+        await loadData();
+        await loadChangeHistory();
+        await loadPreviewStatus();
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: `bot-applied-${Date.now()}`,
+            role: 'assistant',
+            content: `✅ **Changes Approved & Applied:**\n- **Version**: \`v${res.version}\` created\n- **Modified Files**: ${res.files_modified?.join(', ') || 'None'}\n- **New Files**: ${res.files_created?.join(', ') || 'None'}\n- **Live Preview**: ${res.preview_reloaded ? '🔄 Refreshed with new code' : 'Standby'}\n\nYour application was updated non-destructively.`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+        setPendingChangePlan(null);
+      } else {
+        alert(res.error || 'Failed to apply changes');
+      }
+    } catch (err: any) {
+      alert(`Error applying changes: ${err.message}`);
+    } finally {
+      setIsApplyingChange(false);
+    }
+  };
+
+  const handleRejectChangePlan = async () => {
+    if (!pendingChangePlan) return;
+    try {
+      await api.applyProjectChange(projectId, pendingChangePlan.plan_id, false);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `bot-rejected-${Date.now()}`,
+          role: 'assistant',
+          content: `❌ **Change Plan Rejected.** No modifications were applied to your project files. You can provide additional instructions or ask for a different approach.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+      setPendingChangePlan(null);
+    } catch {
+      setPendingChangePlan(null);
+    }
+  };
+
+  const handleRollbackVersion = async (version?: number) => {
+    setIsRollingBack(true);
+    try {
+      const res = await api.rollbackProjectChange(projectId, version);
+      if (res.success) {
+        setChangeSuccessMessage(`Successfully rolled back to version ${res.version}`);
+        setPreviewKey((k) => k + 1);
+        await loadData();
+        await loadChangeHistory();
+        await loadPreviewStatus();
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: `bot-rb-${Date.now()}`,
+            role: 'assistant',
+            content: `⏪ **Project Rolled Back:** Workspace restored to snapshot \`v${res.version}\`. Running preview refreshed.`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+      } else {
+        alert(res.error || 'Rollback failed');
+      }
+    } catch (err: any) {
+      alert(`Rollback error: ${err.message}`);
+    } finally {
+      setIsRollingBack(false);
+    }
+  };
+
+  const handleDownloadZip = async () => {
+    setActionLoading('download');
+    try {
+      const blob = await api.downloadProjectZip(projectId);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(project?.name || 'project').toLowerCase().replace(/[^a-z0-9_]/g, '_')}_codebase.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      setActionResult('Project codebase zip downloaded successfully!');
+    } catch (err: any) {
+      alert(`Download failed: ${err.message}`);
     } finally {
       setActionLoading(null);
     }
@@ -421,6 +731,27 @@ export default function ProjectDetailsPage() {
           {/* Action Trigger Buttons */}
           <div className="flex flex-wrap items-center gap-2">
             <button
+              onClick={() => {
+                setActiveTab('preview');
+                if (previewStatus !== 'running') {
+                  handleStartServer();
+                }
+              }}
+              disabled={isStartingPreview}
+              className="btn-press flex items-center gap-1.5 rounded-xl border border-emerald-500/60 bg-gradient-to-r from-emerald-600/40 to-teal-500/30 px-3.5 py-2 text-xs font-bold text-emerald-200 hover:from-emerald-600/60 hover:to-teal-500/40 disabled:opacity-50 shadow-md"
+              title="Launch and preview live running website"
+            >
+              <Play className="h-3.5 w-3.5 text-accent-emerald" />
+              <span>
+                {previewStatus === 'running'
+                  ? `👁 View Website (: ${previewPort})`
+                  : isStartingPreview
+                  ? 'Booting Sandbox...'
+                  : '▶ Preview Website'}
+              </span>
+            </button>
+
+            <button
               onClick={() => handleBuildWorkspace(true)}
               disabled={Boolean(actionLoading)}
               className="btn-press flex items-center gap-1.5 rounded-xl border border-brand-500/50 bg-gradient-to-r from-brand-600/30 to-brand-500/20 px-3.5 py-2 text-xs font-bold text-brand-300 hover:from-brand-600/40 hover:to-brand-500/30 disabled:opacity-50 shadow-sm"
@@ -446,6 +777,16 @@ export default function ProjectDetailsPage() {
             >
               <CloudUpload className="h-3.5 w-3.5" />
               <span>{actionLoading === 'deploy' ? 'Deploying...' : 'Deploy'}</span>
+            </button>
+
+            <button
+              onClick={handleDownloadZip}
+              disabled={Boolean(actionLoading)}
+              className="btn-press flex items-center gap-1.5 rounded-xl border border-cyan-500/40 bg-cyan-500/20 px-3.5 py-2 text-xs font-bold text-cyan-300 hover:bg-cyan-500/30 disabled:opacity-50"
+              title="Download full project codebase as zip"
+            >
+              <FileCode className="h-3.5 w-3.5" />
+              <span>{actionLoading === 'download' ? 'Zipping...' : 'Download Zip'}</span>
             </button>
 
             <button
@@ -625,35 +966,34 @@ export default function ProjectDetailsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-border-subtle">
+      <div className="flex border-b border-border-subtle overflow-x-auto">
         <button
-          onClick={() => setActiveTab('copilot')}
-          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors ${
-            activeTab === 'copilot'
+          onClick={() => setActiveTab('preview')}
+          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors shrink-0 ${
+            activeTab === 'preview'
               ? 'border-brand-500 text-white'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Sparkles className="h-4 w-4 text-brand-400" />
-          <span>AI Workspace Copilot</span>
-          <span className="rounded-full bg-brand-500/20 px-1.5 py-0.2 text-[9px] font-bold text-brand-300">
-            Interactive
+          <Play className="h-4 w-4 text-accent-emerald" />
+          <span>Live Website Preview</span>
+          <span
+            className={`rounded-full px-1.5 py-0.2 text-[9px] font-bold ${
+              previewStatus === 'running'
+                ? 'bg-accent-emerald/20 text-emerald-300'
+                : previewStatus === 'starting'
+                ? 'bg-amber-400/20 text-amber-300'
+                : previewStatus === 'failed'
+                ? 'bg-accent-rose/20 text-rose-300'
+                : 'bg-surface-400 text-slate-400'
+            }`}
+          >
+            {previewStatus === 'running' ? `Running :${previewPort}` : previewStatus}
           </span>
         </button>
         <button
-          onClick={() => setActiveTab('blueprint')}
-          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors ${
-            activeTab === 'blueprint'
-              ? 'border-brand-500 text-white'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Layers className="h-4 w-4" />
-          <span>Architecture Blueprint</span>
-        </button>
-        <button
           onClick={() => setActiveTab('files')}
-          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors ${
+          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors shrink-0 ${
             activeTab === 'files'
               ? 'border-brand-500 text-white'
               : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -663,8 +1003,24 @@ export default function ProjectDetailsPage() {
           <span>Workspace Files ({project.files?.length || 0})</span>
         </button>
         <button
+          onClick={() => setActiveTab('terminal')}
+          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors shrink-0 ${
+            activeTab === 'terminal'
+              ? 'border-brand-500 text-white'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Terminal className="h-4 w-4 text-cyan-400" />
+          <span>Terminal Logs</span>
+          {previewLogs.length > 0 && (
+            <span className="rounded-full bg-surface-400 px-1.5 py-0.2 text-[9px] font-mono text-slate-300">
+              {previewLogs.length}
+            </span>
+          )}
+        </button>
+        <button
           onClick={() => setActiveTab('test')}
-          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors ${
+          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors shrink-0 ${
             activeTab === 'test'
               ? 'border-brand-500 text-white'
               : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -685,21 +1041,503 @@ export default function ProjectDetailsPage() {
           )}
         </button>
         <button
+          onClick={() => setActiveTab('copilot')}
+          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors shrink-0 ${
+            activeTab === 'copilot'
+              ? 'border-brand-500 text-white'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Sparkles className="h-4 w-4 text-brand-400" />
+          <span>AI Copilot</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('blueprint')}
+          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors shrink-0 ${
+            activeTab === 'blueprint'
+              ? 'border-brand-500 text-white'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Layers className="h-4 w-4" />
+          <span>Blueprint</span>
+        </button>
+        <button
           onClick={() => setActiveTab('teaching')}
-          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors ${
+          className={`btn-press flex items-center gap-2 border-b-2 px-5 py-3 text-xs font-bold transition-colors shrink-0 ${
             activeTab === 'teaching'
               ? 'border-brand-500 text-white'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
           <GraduationCap className="h-4 w-4" />
-          <span>AI Teacher & Mentor</span>
+          <span>AI Teacher</span>
         </button>
       </div>
+
+      {/* Tab: Live Website Preview */}
+      {activeTab === 'preview' && (
+        <div className="space-y-4">
+          {/* Preview Control Toolbar */}
+          <div className="rounded-2xl border border-border-subtle bg-surface-300/90 p-4 shadow-xl">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              {/* Left: Status badge and URL */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`flex h-2.5 w-2.5 rounded-full ${
+                      previewStatus === 'running'
+                        ? 'bg-accent-emerald animate-ping'
+                        : previewStatus === 'starting'
+                        ? 'bg-amber-400 animate-pulse'
+                        : previewStatus === 'failed'
+                        ? 'bg-accent-rose'
+                        : 'bg-slate-500'
+                    }`}
+                  />
+                  <span className="text-xs font-bold uppercase tracking-wider text-white">
+                    {previewStatus === 'running'
+                      ? `Running (Port ${previewPort})`
+                      : previewStatus === 'starting'
+                      ? 'Starting Sandbox...'
+                      : previewStatus === 'failed'
+                      ? 'Failed'
+                      : previewStatus === 'stopped'
+                      ? 'Stopped'
+                      : 'Not Started'}
+                  </span>
+                </div>
+
+                {previewStatus === 'running' && (
+                  <div className="flex items-center gap-2 rounded-xl bg-surface-400/80 px-3 py-1 border border-border-subtle font-mono text-[11px] text-brand-300">
+                    <span className="text-slate-400">URL:</span>
+                    <span>http://localhost:{previewPort}</span>
+                    <a
+                      href={`http://localhost:${previewPort}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-slate-400 hover:text-white ml-1"
+                      title="Open in new browser tab"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  </div>
+                )}
+
+                {previewStatus === 'running' && previewUptime > 0 && (
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    uptime: {Math.floor(previewUptime / 60)}m {previewUptime % 60}s
+                  </span>
+                )}
+              </div>
+
+              {/* Center: Viewport Switcher */}
+              <div className="flex items-center gap-1 bg-surface-400/60 p-1 rounded-xl border border-border-subtle self-start lg:self-center">
+                <button
+                  type="button"
+                  onClick={() => setPreviewViewport('desktop')}
+                  className={`btn-press flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium ${
+                    previewViewport === 'desktop'
+                      ? 'bg-brand-600 text-white font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title="Desktop View (100%)"
+                >
+                  <Monitor className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Desktop</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewViewport('tablet')}
+                  className={`btn-press flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium ${
+                    previewViewport === 'tablet'
+                      ? 'bg-brand-600 text-white font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title="Tablet View (768px)"
+                >
+                  <Tablet className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Tablet</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewViewport('mobile')}
+                  className={`btn-press flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium ${
+                    previewViewport === 'mobile'
+                      ? 'bg-brand-600 text-white font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title="Mobile View (375px)"
+                >
+                  <Smartphone className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Mobile</span>
+                </button>
+              </div>
+
+              {/* Right: Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                {previewStatus !== 'running' ? (
+                  <button
+                    onClick={handleStartServer}
+                    disabled={isStartingPreview}
+                    className="btn-press flex items-center gap-1.5 rounded-xl bg-accent-emerald px-3.5 py-1.5 text-xs font-bold text-slate-900 hover:bg-emerald-400 shadow-sm disabled:opacity-50"
+                  >
+                    <Play className="h-3.5 w-3.5 fill-current" />
+                    <span>{isStartingPreview ? 'Booting...' : 'Start Server'}</span>
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={handleRestartServer}
+                      disabled={isStartingPreview}
+                      className="btn-press flex items-center gap-1.5 rounded-xl border border-border-subtle bg-surface-400 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-surface-500"
+                      title="Restart sandbox process"
+                    >
+                      <RotateCw className={`h-3.5 w-3.5 ${isStartingPreview ? 'animate-spin' : ''}`} />
+                      <span>Restart</span>
+                    </button>
+                    <button
+                      onClick={handleStopServer}
+                      className="btn-press flex items-center gap-1.5 rounded-xl border border-accent-rose/30 bg-accent-rose/10 px-3 py-1.5 text-xs font-medium text-accent-rose hover:bg-accent-rose/20"
+                      title="Stop server"
+                    >
+                      <Square className="h-3.5 w-3.5" />
+                      <span>Stop</span>
+                    </button>
+                    <button
+                      onClick={() => setPreviewKey((k) => k + 1)}
+                      className="btn-press flex items-center gap-1.5 rounded-xl border border-border-subtle bg-surface-400 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-surface-500"
+                      title="Refresh iframe frame"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      <span>Refresh</span>
+                    </button>
+                  </>
+                )}
+
+                <button
+                  onClick={handleRunLiveTest}
+                  disabled={liveTesting}
+                  className="btn-press flex items-center gap-1.5 rounded-xl border border-brand-500/40 bg-brand-500/20 px-3 py-1.5 text-xs font-bold text-brand-300 hover:bg-brand-500/30 disabled:opacity-50"
+                  title="Run automated interactive verification tests against live server"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5 text-brand-400" />
+                  <span>{liveTesting ? 'Testing...' : 'Live E2E Test'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Live Test Results Alert (if run) */}
+          {liveTestResults && (
+            <div
+              className={`rounded-2xl border p-4 shadow-lg ${
+                liveTestResults.passed
+                  ? 'border-accent-emerald/40 bg-accent-emerald/10'
+                  : 'border-accent-rose/40 bg-accent-rose/10'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className={`h-4 w-4 ${liveTestResults.passed ? 'text-accent-emerald' : 'text-accent-rose'}`} />
+                  <span className="text-xs font-bold text-white">
+                    Live Interactive Verification Results: {liveTestResults.passed_checks} / {liveTestResults.total_checks} Checks Passed
+                  </span>
+                </div>
+                <button onClick={() => setLiveTestResults(null)} className="text-slate-400 hover:text-white text-xs">
+                  &times; Dismiss
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                {liveTestResults.checks.map((c, i) => (
+                  <div key={i} className="rounded-xl bg-surface-400/80 p-2.5 border border-border-subtle text-xs flex items-start gap-2">
+                    <span className={`font-bold ${c.passed ? 'text-accent-emerald' : 'text-accent-rose'}`}>
+                      {c.passed ? '✓' : '✗'}
+                    </span>
+                    <div>
+                      <div className="font-semibold text-white">{c.name}</div>
+                      <div className="text-[11px] text-slate-400">{c.detail}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Error & AI Diagnosis Card (if failed) */}
+          {previewStatus === 'failed' && (
+            <div className="rounded-2xl border border-accent-rose/40 bg-accent-rose/10 p-5 space-y-4 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-5 w-5 text-accent-rose shrink-0" />
+                  <div>
+                    <h4 className="text-xs font-bold text-white">Application Startup or Runtime Error</h4>
+                    <p className="text-[11px] text-rose-200 mt-0.5">{previewError || 'Process terminated with non-zero exit code.'}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleDiagnoseError}
+                    disabled={diagnosing}
+                    className="btn-press flex items-center gap-1.5 rounded-xl bg-brand-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-brand-500 shadow-sm"
+                  >
+                    <Bug className="h-3.5 w-3.5 text-amber-300" />
+                    <span>{diagnosing ? 'AI Diagnosing Error...' : 'Ask AI to Diagnose & Fix'}</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('terminal')}
+                    className="btn-press rounded-xl border border-border-subtle bg-surface-400 px-3 py-1.5 text-xs text-slate-300 hover:text-white"
+                  >
+                    View Logs
+                  </button>
+                </div>
+              </div>
+
+              {/* AI Diagnosis Details & Proposed Targeted Fix */}
+              {aiDiagnosis && (
+                <div className="rounded-xl border border-brand-500/40 bg-surface-400/90 p-4 space-y-3 mt-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-brand-400" />
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">
+                      AI Diagnosis & Targeted Code Fix
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-accent-cyan">{aiDiagnosis.summary}</div>
+                    <p className="text-xs text-slate-300 mt-1">{aiDiagnosis.root_cause}</p>
+                    <div className="text-[11px] text-brand-300 font-mono mt-1">Target File: {aiDiagnosis.file}</div>
+                  </div>
+
+                  {aiDiagnosis.original_snippet && (
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-semibold text-rose-400 uppercase">Original Failing Code:</span>
+                      <pre className="rounded bg-black/60 p-2 font-mono text-[11px] text-rose-300 overflow-x-auto">
+                        <code>{aiDiagnosis.original_snippet}</code>
+                      </pre>
+                    </div>
+                  )}
+
+                  {aiDiagnosis.replacement_snippet && (
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-semibold text-emerald-400 uppercase">Targeted Replacement:</span>
+                      <pre className="rounded bg-black/60 p-2 font-mono text-[11px] text-emerald-300 overflow-x-auto">
+                        <code>{aiDiagnosis.replacement_snippet}</code>
+                      </pre>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 pt-2">
+                    <button
+                      onClick={handleApplyFix}
+                      disabled={applyingFix}
+                      className="btn-press flex items-center gap-1.5 rounded-lg bg-accent-emerald px-3.5 py-1.5 text-xs font-bold text-slate-900 hover:bg-emerald-400 shadow-sm"
+                    >
+                      <Wrench className="h-3.5 w-3.5" />
+                      <span>{applyingFix ? 'Applying Fix...' : 'Approve & Apply Fix'}</span>
+                    </button>
+                    <button
+                      onClick={handleRollbackFix}
+                      className="btn-press flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-400 px-3 py-1.5 text-xs text-slate-300 hover:text-white"
+                      title="Rollback previous fix from backup"
+                    >
+                      <Undo2 className="h-3.5 w-3.5" />
+                      <span>Rollback</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {fixMessage && (
+                <div className="rounded-lg bg-emerald-500/20 border border-emerald-500/30 p-2.5 text-xs text-emerald-300 font-medium">
+                  {fixMessage}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Interactive Frame Viewer */}
+          <div className="rounded-2xl border border-border-subtle bg-surface-300/40 p-3 flex justify-center items-center overflow-hidden min-h-[640px]">
+            {previewStatus === 'running' ? (
+              <div
+                className={`transition-all duration-300 w-full h-[640px] rounded-xl overflow-hidden border border-border-subtle bg-black shadow-2xl ${
+                  previewViewport === 'tablet'
+                    ? 'max-w-[768px]'
+                    : previewViewport === 'mobile'
+                    ? 'max-w-[375px]'
+                    : 'w-full'
+                }`}
+              >
+                <iframe
+                  key={previewKey}
+                  src={`/api/preview/${projectId}/proxy/`}
+                  title="Live Generated Website Preview"
+                  className="w-full h-full border-0 bg-white"
+                  sandbox="allow-scripts allow-forms allow-same-origin allow-downloads"
+                />
+              </div>
+            ) : previewStatus === 'starting' ? (
+              <div className="text-center py-24 space-y-4">
+                <div className="mx-auto h-12 w-12 rounded-full border-2 border-brand-500 border-t-transparent animate-spin" />
+                <h3 className="text-sm font-bold text-white">Booting Isolated Sandbox Container...</h3>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  Allocating dynamic TCP port, configuring sanitized execution environment, and verifying liveness health check probe.
+                </p>
+              </div>
+            ) : (
+              <div className="text-center py-20 space-y-4 max-w-md mx-auto">
+                <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-brand-600/30 to-accent-emerald/20 border border-emerald-500/30 mx-auto flex items-center justify-center text-accent-emerald shadow-lg">
+                  <Play className="h-8 w-8 ml-1 fill-current" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Interactive Website Sandbox Ready</h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Launch this generated project in a sandboxed runtime to preview the real frontend and interact with live backend APIs.
+                  </p>
+                </div>
+                <button
+                  onClick={handleStartServer}
+                  disabled={isStartingPreview}
+                  className="btn-press inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-accent-emerald to-teal-500 px-5 py-2.5 text-xs font-bold text-slate-900 hover:from-emerald-400 hover:to-teal-400 shadow-md shadow-emerald-500/20"
+                >
+                  <Play className="h-4 w-4 fill-current" />
+                  <span>{isStartingPreview ? 'Booting Server...' : 'Launch Live Website Preview'}</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Terminal Logs */}
+      {activeTab === 'terminal' && (
+        <div className="rounded-2xl border border-border-subtle bg-surface-300/80 p-5 space-y-4 shadow-xl">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border-subtle pb-3">
+            <div className="flex items-center gap-2 font-mono text-xs text-slate-300">
+              <Terminal className="h-4 w-4 text-cyan-400" />
+              <span className="font-bold text-white">SANDBOX PROCESS TERMINAL</span>
+              {previewPid && <span className="text-slate-500">(PID: {previewPid})</span>}
+              {previewPort && <span className="text-slate-500">(Port: {previewPort})</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => loadPreviewStatus()}
+                className="btn-press flex items-center gap-1.5 rounded-lg border border-border-subtle bg-surface-400 px-2.5 py-1 text-xs text-slate-300 hover:text-white"
+              >
+                <RefreshCw className="h-3 w-3" />
+                <span>Refresh Logs</span>
+              </button>
+              <button
+                onClick={() => setPreviewLogs([])}
+                className="btn-press rounded-lg border border-border-subtle bg-surface-400 px-2.5 py-1 text-xs text-slate-400 hover:text-white"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-black/90 p-4 border border-border-subtle font-mono text-xs text-slate-200 h-[500px] overflow-y-auto space-y-1">
+            {previewLogs.length > 0 ? (
+              previewLogs.map((logLine, idx) => {
+                const isErr = logLine.includes('ERROR') || logLine.includes('Traceback') || logLine.includes('Error:');
+                const isWarn = logLine.includes('WARNING') || logLine.includes('WARN');
+                return (
+                  <div
+                    key={idx}
+                    className={`leading-relaxed whitespace-pre-wrap ${
+                      isErr ? 'text-accent-rose' : isWarn ? 'text-amber-300' : 'text-slate-300'
+                    }`}
+                  >
+                    {logLine}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-slate-500 py-12 text-center">
+                Terminal idle. Start the preview server to stream runtime stdout and stderr logs.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Tab 1: AI Workspace Copilot / Chat */}
       {activeTab === 'copilot' && (
         <div className="space-y-4">
+          {/* Phase 1.4: Proposed Change Plan Approval Card */}
+          {pendingChangePlan && (
+            <div className="rounded-2xl border border-amber-500/40 bg-surface-300 p-5 shadow-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300 border border-amber-500/30">
+                    PENDING APPROVAL
+                  </span>
+                  <span className="text-xs font-bold text-white">Proposed Code & Feature Modifications</span>
+                </div>
+                <button
+                  onClick={handleRejectChangePlan}
+                  className="text-xs text-slate-400 hover:text-white"
+                >
+                  ✕ Dismiss
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs text-slate-300 font-medium">
+                  {pendingChangePlan.understanding}
+                </p>
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {pendingChangePlan.affected_files?.map((f: string, i: number) => (
+                    <span key={i} className="text-[11px] font-mono px-2 py-0.5 rounded bg-surface-400 border border-border-subtle text-amber-300">
+                      ✎ {f}
+                    </span>
+                  ))}
+                  {pendingChangePlan.new_files?.map((f: string, i: number) => (
+                    <span key={i} className="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-300">
+                      + {f}
+                    </span>
+                  ))}
+                </div>
+
+                {pendingChangePlan.features_to_add_or_modify && (
+                  <div className="pt-2">
+                    <span className="text-[11px] font-semibold text-slate-400 block mb-1">Key Updates:</span>
+                    <ul className="text-xs text-slate-300 space-y-1 list-disc list-inside">
+                      {pendingChangePlan.features_to_add_or_modify.map((feat: string, i: number) => (
+                        <li key={i}>{feat}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {pendingChangePlan.risks_and_breaking_changes && (
+                  <div className="text-[11px] text-slate-400 bg-surface-400/40 rounded-lg p-2 border border-border-subtle">
+                    <span className="font-semibold text-slate-300">Safety & Validation: </span>
+                    {pendingChangePlan.risks_and_breaking_changes.join(', ')}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  onClick={handleApproveChangePlan}
+                  disabled={isApplyingChange}
+                  className="btn-press flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-4 py-2 shadow-md shadow-emerald-600/20 disabled:opacity-50"
+                >
+                  <Check className="h-4 w-4" />
+                  <span>{isApplyingChange ? 'Applying Changes & Validating Syntax...' : 'Approve & Apply Changes'}</span>
+                </button>
+                <button
+                  onClick={handleRejectChangePlan}
+                  disabled={isApplyingChange}
+                  className="btn-press rounded-xl bg-surface-400 hover:bg-surface-500 text-slate-300 hover:text-white font-bold text-xs px-4 py-2 border border-border-subtle"
+                >
+                  Reject Plan
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Main Chat Box */}
           <div className="rounded-2xl border border-border-subtle bg-surface-300/80 shadow-xl overflow-hidden flex flex-col h-[600px]">
             {/* Chat Header */}
@@ -903,6 +1741,49 @@ export default function ProjectDetailsPage() {
               </form>
             </div>
           </div>
+
+          {/* Phase 1.4: Version History & Snapshot Rollback Drawer */}
+          {changeHistory.length > 0 && (
+            <div className="rounded-2xl border border-border-subtle bg-surface-300/80 p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Undo2 className="h-4 w-4 text-brand-400" />
+                  <h4 className="text-xs font-bold text-white">Project Version History & Snapshots</h4>
+                  <span className="rounded-full bg-surface-400 px-2 py-0.5 text-[10px] text-slate-400">
+                    {changeHistory.length} snapshots
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {changeHistory.slice().reverse().map((snap: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between p-3 rounded-xl bg-surface-400/50 border border-border-subtle text-xs"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-brand-300 text-[11px]">v{snap.version}</span>
+                        <span className="text-white font-medium">{snap.instruction}</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400">
+                        {new Date(snap.timestamp).toLocaleString()} • {snap.files_backed_up?.length || 0} files backed up
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={() => handleRollbackVersion(snap.version)}
+                      disabled={isRollingBack}
+                      className="btn-press flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-300 hover:bg-surface-200 text-slate-300 hover:text-white text-[11px] font-semibold border border-border-subtle"
+                    >
+                      <RotateCw className="h-3 w-3" />
+                      <span>Rollback to v{snap.version}</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1378,6 +2259,49 @@ export default function ProjectDetailsPage() {
               </div>
             </div>
           </div>
+
+          {/* Phase 1.4: Version History & Snapshot Rollback Drawer */}
+          {changeHistory.length > 0 && (
+            <div className="rounded-2xl border border-border-subtle bg-surface-300/80 p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Undo2 className="h-4 w-4 text-brand-400" />
+                  <h4 className="text-xs font-bold text-white">Project Version History & Snapshots</h4>
+                  <span className="rounded-full bg-surface-400 px-2 py-0.5 text-[10px] text-slate-400">
+                    {changeHistory.length} snapshots
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {changeHistory.slice().reverse().map((snap: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between p-3 rounded-xl bg-surface-400/50 border border-border-subtle text-xs"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-brand-300 text-[11px]">v{snap.version}</span>
+                        <span className="text-white font-medium">{snap.instruction}</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400">
+                        {new Date(snap.timestamp).toLocaleString()} • {snap.files_backed_up?.length || 0} files backed up
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={() => handleRollbackVersion(snap.version)}
+                      disabled={isRollingBack}
+                      className="btn-press flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-300 hover:bg-surface-200 text-slate-300 hover:text-white text-[11px] font-semibold border border-border-subtle"
+                    >
+                      <RotateCw className="h-3 w-3" />
+                      <span>Rollback to v{snap.version}</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -27,6 +27,14 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
 
+class AnalyzeIdeaRequest(BaseModel):
+    description: str
+    title: Optional[str] = None
+    category: Optional[str] = None
+    target_audience: Optional[str] = None
+    preferred_technology: Optional[Dict[str, Any]] = None
+    design_preferences: Optional[str] = None
+
 class CreateProjectRequest(BaseModel):
     name: Optional[str] = None
     title: Optional[str] = None  # Frontend alias
@@ -36,6 +44,7 @@ class CreateProjectRequest(BaseModel):
     repository_name: Optional[str] = ""
     tech_stack: Optional[Dict[str, Any]] = None
     custom_instructions: Optional[str] = None
+    blueprint: Optional[Dict[str, Any]] = None
 
 class UpdateProjectRequest(BaseModel):
     name: Optional[str] = None
@@ -176,6 +185,7 @@ async def create_project(
         problem_id=problem_id,
         github_repo_name=body.repository_name or "",
         tech_stack=body.tech_stack or {},
+        blueprint=body.blueprint or None,
         status="planning",
     )
     db.add(project)
@@ -462,6 +472,98 @@ async def advance_project_workflow(
         "project": project.to_dict(),
         "message": f"Project advanced to {next_stage} stage",
     }
+
+
+@router.post("/analyze-idea")
+async def analyze_idea_endpoint(
+    body: AnalyzeIdeaRequest,
+    user: User = Depends(get_user_from_token),
+):
+    """
+    Directly analyze a natural-language project description using BlueprintEngine.
+    Returns category classification, extracted features, tech stack, and full blueprint.
+    """
+    from backend.services.blueprint_engine import BlueprintEngine
+    desc = body.description.strip()
+    if not desc:
+        raise HTTPException(status_code=400, detail="Project description cannot be empty")
+
+    title = (body.title or "").strip()
+    if not title:
+        # Generate sensible title from description
+        words = desc.split()[:5]
+        title = " ".join(words).title()
+
+    detected_category = body.category or BlueprintEngine.detect_category(title, desc)
+    custom_instr = []
+    if body.target_audience:
+        custom_instr.append(f"Target Audience: {body.target_audience}")
+    if body.design_preferences:
+        custom_instr.append(f"Design Preferences: {body.design_preferences}")
+
+    full_custom = "\n".join(custom_instr) if custom_instr else None
+
+    blueprint = await BlueprintEngine.generate_blueprint(
+        title=title,
+        description=desc,
+        tech_stack=body.preferred_technology,
+        custom_instructions=full_custom,
+    )
+
+    return {
+        "title": title,
+        "description": desc,
+        "detected_category": detected_category,
+        "blueprint": blueprint,
+    }
+
+
+@router.get("/{project_id}/download")
+async def download_project_zip(
+    project_id: str,
+    user: User = Depends(get_user_from_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Package and download the generated workspace as a zip file."""
+    import io
+    import zipfile
+    from fastapi.responses import Response
+
+    result = await db.execute(
+        select(Project).where(Project.id == project_id, Project.owner_id == user.id)
+    )
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    from backend.services.workspace_builder import WorkspaceBuilder
+    workspace_dir = WorkspaceBuilder.get_workspace_dir(project.id, project.name)
+    if not workspace_dir.exists():
+        raise HTTPException(status_code=404, detail="Project workspace has not been generated yet")
+
+    zip_buffer = io.BytesIO()
+    EXCLUDE_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".pytest_cache"}
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for p in workspace_dir.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(workspace_dir)
+                parts = set(rel.parts)
+                if parts & EXCLUDE_DIRS or any(part.startswith(".") for part in parts if part != ".gitignore"):
+                    continue
+                if p.name.startswith(".env") or p.suffix in (".pyc", ".log", ".pem", ".key"):
+                    continue
+                zip_file.write(p, arcname=rel.as_posix())
+
+    zip_buffer.seek(0)
+    clean_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in project.name).lower()
+    filename = f"{clean_name}_codebase.zip"
+
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.delete("/{project_id}")

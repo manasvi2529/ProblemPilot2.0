@@ -33,7 +33,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Search configured: {settings.search_configured} ({settings.SEARCH_PROVIDER})")
     logger.info(f"GitHub configured: {settings.github_configured}")
     yield
-    logger.info("Shutting down")
+    logger.info("Shutting down - cleaning up running sandbox processes")
+    from backend.services.execution_engine import execution_engine
+    execution_engine.cleanup_all()
+    logger.info("Sandbox processes cleaned up")
 
 
 app = FastAPI(
@@ -54,7 +57,7 @@ app.add_middleware(
 )
 
 # ── API Routers ──────────────────────────────────────────────────────────────
-from backend.routers import auth, research, projects, approvals, discover, orchestrator, integrations
+from backend.routers import auth, research, projects, approvals, discover, orchestrator, integrations, preview, editor
 
 app.include_router(auth.router)
 app.include_router(research.router)
@@ -63,6 +66,8 @@ app.include_router(projects.router)
 app.include_router(approvals.router)
 app.include_router(orchestrator.router)
 app.include_router(integrations.router)
+app.include_router(preview.router)
+app.include_router(editor.router)
 
 
 # ── API Health Check ─────────────────────────────────────────────────────────

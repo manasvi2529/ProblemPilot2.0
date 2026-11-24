@@ -285,12 +285,12 @@ async def deploy_cloud(
 
 
 @router.get("/projects/{project_id}/files")
-async def get_workspace_files(
+async def get_project_files_endpoint(
     project_id: str,
     user: User = Depends(get_user_from_token),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all source files from disk for the project workspace."""
+    """Retrieve the generated source files for a project workspace with path security."""
     res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
     project = res.scalar_one_or_none()
     if not project:
@@ -299,8 +299,9 @@ async def get_workspace_files(
     workspace_dir = orchestrator.workspace_builder.get_workspace_dir(project.id, project.name)
     files = []
     EXCLUDE_DIRS = {".git", ".venv", "venv", "__pycache__", "node_modules", ".pytest_cache"}
+
     if workspace_dir.exists():
-        for p in workspace_dir.rglob("*"):
+        for p in sorted(workspace_dir.rglob("*")):
             if p.is_file():
                 rel = p.relative_to(workspace_dir)
                 parts = set(rel.parts)
@@ -312,16 +313,58 @@ async def get_workspace_files(
                     content = p.read_text(encoding="utf-8", errors="ignore")
                     ext = p.suffix.lstrip(".")
                     files.append({
-                        "name": p.name,
                         "path": rel.as_posix(),
+                        "name": p.name,
                         "extension": ext,
+                        "language": ext or "text",
                         "size_bytes": p.stat().st_size,
                         "content": content,
                     })
                 except Exception:
                     pass
 
-    return {"files": files, "workspace_dir": str(workspace_dir)}
+    return {
+        "project_id": project.id,
+        "workspace_dir": str(workspace_dir),
+        "files": files,
+        "total": len(files),
+    }
+
+
+@router.get("/projects/{project_id}/files/{file_path:path}")
+async def read_project_file_endpoint(
+    project_id: str,
+    file_path: str,
+    user: User = Depends(get_user_from_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Safely read an individual file inside the project workspace."""
+    from pathlib import Path
+    rel_path = Path(file_path)
+    if rel_path.is_absolute() or ".." in rel_path.parts:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+    project = res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    workspace_dir = orchestrator.workspace_builder.get_workspace_dir(project.id, project.name)
+    target = (workspace_dir / file_path).resolve()
+
+    if not str(target).startswith(str(workspace_dir.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied: path outside workspace")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    content = target.read_text(encoding="utf-8", errors="ignore")
+    return {
+        "project_id": project.id,
+        "path": file_path,
+        "name": target.name,
+        "size_bytes": target.stat().st_size,
+        "content": content,
+    }
 
 
 @router.post("/projects/{project_id}/chat")

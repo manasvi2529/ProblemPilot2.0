@@ -49,12 +49,21 @@ export default function ProjectsPage() {
             All active problem-to-codebase pipelines, blueprints, and workspaces.
           </p>
         </div>
-        <Link
-          href="/"
-          className="btn-press flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-xs font-bold text-white hover:bg-brand-500 shadow-md shadow-brand-500/20"
-        >
-          <span>+ New Prompt Studio</span>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/new-project"
+            className="btn-press flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-500 shadow-md shadow-emerald-500/20"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Generate Website</span>
+          </Link>
+          <Link
+            href="/"
+            className="btn-press flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-xs font-bold text-white hover:bg-brand-500 shadow-md shadow-brand-500/20"
+          >
+            <span>+ Prompt Studio</span>
+          </Link>
+        </div>
       </div>
 
       {isLoading ? (
@@ -98,7 +107,7 @@ export default function ProjectsPage() {
                         {proj.created_at ? new Date(proj.created_at).toLocaleDateString() : 'Active'}
                       </span>
                       <button
-                        onClick={(e) => handleDeleteProject(e, proj.id, proj.title || proj.name)}
+                        onClick={(e) => handleDeleteProject(e, proj.id, proj.title || proj.name || 'Untitled')}
                         className="btn-press p-1.5 rounded-lg text-slate-400 hover:text-accent-rose hover:bg-accent-rose/15 transition-colors"
                         title="Delete project"
                       >

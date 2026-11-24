@@ -6,6 +6,7 @@ PROJECT DESIGN → BUILD → TEST → GITHUB → DEPLOY.
 Supports Autonomous, Guided, and Hybrid execution modes with enforced approval checkpoints.
 """
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -827,10 +828,29 @@ Your role:
                 f"💡 **Suggested Next Step**: Click **'⚡ AI Generate Full Codebase'** to synthesize custom source files, or ask me to tailor the database schema!"
             )
 
+        # Check if the user is requesting a code or feature modification
+        change_plan = None
+        if workspace_dir.exists() and any(w in msg_lower for w in ["change", "add", "modify", "update", "redesign", "theme", "color", "pricing", "contact", "form", "page", "feature", "button"]):
+            from backend.services.iterative_engine import change_planner
+            try:
+                change_plan = await change_planner.plan_changes(
+                    project_id=project.id,
+                    instruction=message,
+                    blueprint=blueprint,
+                    workspace_dir=workspace_dir,
+                    history=history,
+                )
+                if change_plan:
+                    suggested_actions.append("review_change_plan")
+                    reply += f"\n\n📋 **Proposed Change Plan Generated:**\n- **Understanding**: {change_plan.get('understanding')}\n- **Affected Files**: `{', '.join(change_plan.get('affected_files', [])) or 'None'}`\n- **New Files**: `{', '.join(change_plan.get('new_files', [])) or 'None'}`\n\nPlease review and approve the proposed change plan below to apply the updates safely."
+            except Exception as e:
+                logger.warning(f"Auto-planning change in chat failed: {e}")
+
         return {
             "reply": reply,
             "suggested_actions": suggested_actions,
             "suggested_tech_stack": suggested_tech_stack,
+            "change_plan": change_plan,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 

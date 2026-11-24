@@ -85,6 +85,9 @@ async def get_optional_user(request: Request, db: AsyncSession = Depends(get_db)
         return None
 
 
+get_optional_user_from_token = get_optional_user
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=TokenResponse, status_code=201)

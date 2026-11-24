@@ -1,12 +1,9 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/auth-context';
 import { PreferencesProvider } from '@/lib/preferences-context';
 import { Sidebar } from '@/components/Sidebar';
 import { AuthModal } from '@/components/AuthModal';
-
-const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'ProblemPilot AI — Problem Discovery & Codebase Generation',
@@ -21,7 +18,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.className} min-h-screen bg-[#090d16] text-slate-100`}>
+      <body className="min-h-screen bg-[#090d16] text-slate-100 font-sans">
         <PreferencesProvider>
           <AuthProvider>
             <Sidebar />

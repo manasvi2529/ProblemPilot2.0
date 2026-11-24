@@ -50,6 +50,7 @@ export function Navbar() {
 
   const navItems = [
     { label: 'Prompt Studio', href: '/', icon: Sparkles },
+    { label: 'Create Website', href: '/new-project', icon: Layers },
     { label: 'Projects', href: '/projects', icon: FolderGit2 },
     {
       label: 'Approvals',
