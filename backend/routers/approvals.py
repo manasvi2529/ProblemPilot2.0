@@ -168,13 +168,13 @@ async def get_workflow_state(
 async def list_audit_trail(
     category: Optional[str] = None,
     limit: int = 50,
-    user: Optional[User] = Depends(get_optional_user),
+    user: User = Depends(get_user_from_token),
     db: AsyncSession = Depends(get_db),
 ):
-    """Retrieve system and security audit logs."""
+    """Retrieve system and security audit logs strictly isolated per tenant (admin sees platform logs)."""
     query = select(AuditLog)
-    if user:
-        query = query.where((AuditLog.user_id == user.id) | (AuditLog.user_id == None))
+    if not getattr(user, "is_admin", False) and getattr(user, "role", "user") != "admin":
+        query = query.where(AuditLog.user_id == user.id)
     if category:
         query = query.where(AuditLog.category == category)
     query = query.order_by(AuditLog.created_at.desc()).limit(limit)

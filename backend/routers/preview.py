@@ -30,6 +30,7 @@ from backend.database import get_db
 from backend.models.user import User
 from backend.models.project import Project
 from backend.routers.auth import get_user_from_token, get_optional_user_from_token
+from backend.services.quota_service import quota_service
 from backend.services.workspace_builder import WorkspaceBuilder
 from backend.services.execution_engine import execution_engine
 from backend.services.debugger_service import debugger_service
@@ -66,6 +67,7 @@ async def start_preview_server(
 ):
     """Start project application server inside isolated sandbox."""
     project = await _get_authorized_project(project_id, user, db)
+    await quota_service.check_quota(db, user, "start_preview")
     workspace_dir = WorkspaceBuilder.get_workspace_dir(project.id, project.name)
 
     # If workspace is empty but project has files persisted in DB, hydrate workspace to disk

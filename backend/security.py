@@ -100,6 +100,9 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")
 
 
+get_password_hash = hash_password
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         pwd_bytes = plain_password.encode("utf-8")[:72]
@@ -109,11 +112,15 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
+import uuid
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
+    if "jti" not in to_encode:
+        to_encode["jti"] = str(uuid.uuid4())
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
@@ -127,6 +134,42 @@ def decode_access_token(token: str) -> dict:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         )
+
+
+async def revoke_token(token: str, db: AsyncSession) -> bool:
+    """Revoke a JWT token by adding its unique jti/digest to the token blacklist."""
+    try:
+        payload = decode_access_token(token)
+        jti = payload.get("jti") or hashlib.sha256(token.encode()).hexdigest()
+        user_id = payload.get("sub", "")
+        exp_ts = payload.get("exp")
+        expires_at = datetime.fromtimestamp(exp_ts, timezone.utc) if exp_ts else datetime.now(timezone.utc) + timedelta(days=1)
+
+        from backend.models.usage import TokenBlacklist
+        bl = TokenBlacklist(
+            jti=jti,
+            user_id=user_id,
+            revoked_at=datetime.now(timezone.utc),
+            expires_at=expires_at,
+        )
+        db.add(bl)
+        await db.commit()
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to revoke token: {e}")
+        return False
+
+
+async def is_token_revoked(token: str, db: AsyncSession) -> bool:
+    """Check whether a token jti has been invalidated/revoked."""
+    try:
+        payload = decode_access_token(token)
+        jti = payload.get("jti") or hashlib.sha256(token.encode()).hexdigest()
+        from backend.models.usage import TokenBlacklist
+        res = await db.execute(select(TokenBlacklist).where(TokenBlacklist.jti == jti))
+        return res.scalar_one_or_none() is not None
+    except Exception:
+        return True
 
 
 async def get_current_user(

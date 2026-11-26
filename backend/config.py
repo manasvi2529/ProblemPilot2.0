@@ -68,9 +68,14 @@ class Settings(BaseSettings):
     RENDER_SERVICE_ID: Optional[str] = None
 
     # Execution & Isolation
+    EXECUTION_MODE: str = "auto"  # "docker" | "local_dev" | "auto"
     EXECUTION_TIMEOUT_SECONDS: int = 30
     EXECUTION_MAX_RETRIES: int = 3
     MAX_MEMORY_MB: int = 512
+    CONTAINER_CPU_LIMIT: float = 0.5
+    CONTAINER_PIDS_LIMIT: int = 64
+    CONTAINER_IMAGE: str = "python:3.11-slim"
+    ALLOW_INSECURE_LOCAL_FALLBACK: bool = False
 
     # Paths
     BASE_DIR: Path = Path(__file__).resolve().parent.parent

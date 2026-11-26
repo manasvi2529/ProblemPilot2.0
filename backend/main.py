@@ -56,10 +56,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from backend.middleware.rate_limiter import RateLimiterMiddleware
+
+# Rate Limiter & Payload Size Governance Middleware
+app.add_middleware(RateLimiterMiddleware)
+
 # ── API Routers ──────────────────────────────────────────────────────────────
-from backend.routers import auth, research, projects, approvals, discover, orchestrator, integrations, preview, editor, benchmarks
+from backend.routers import auth, research, projects, approvals, discover, orchestrator, integrations, preview, editor, benchmarks, admin
 
 app.include_router(auth.router)
+app.include_router(admin.router)
 app.include_router(research.router)
 app.include_router(discover.router)
 app.include_router(projects.router)
@@ -95,7 +101,7 @@ async def get_audit_alias(
     category: str = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
-    user = Depends(auth.get_optional_user),
+    user = Depends(auth.get_user_from_token),
 ):
     """Alias for audit log retrieval."""
     from backend.routers.approvals import list_audit_trail

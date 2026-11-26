@@ -22,6 +22,7 @@ from backend.services.research_service import (
     build_analysis_prompt, build_scoring_weights,
 )
 from backend.services.live_research_engine import live_research_engine
+from backend.services.quota_service import quota_service
 from backend.config import settings
 
 logger = logging.getLogger(__name__)
@@ -205,6 +206,8 @@ async def create_research_session(
     db: AsyncSession = Depends(get_db),
 ):
     """Start a new research session with live web search."""
+    await quota_service.check_quota(db, user, "research_session")
+
     session = ResearchSession(
         owner_id=user.id,
         query=body.query,
@@ -246,7 +249,10 @@ async def list_research_sessions(
         .options(selectinload(ResearchSession.sources), selectinload(ResearchSession.problems))
     )
     if user:
-        query = query.where((ResearchSession.owner_id == user.id) | (ResearchSession.owner_id == None))
+        if not user.is_admin:
+            query = query.where((ResearchSession.owner_id == user.id) | (ResearchSession.owner_id == None))
+    else:
+        query = query.where(ResearchSession.owner_id == None)
     query = query.order_by(ResearchSession.created_at.desc()).limit(25)
     result = await db.execute(query)
     sessions = result.scalars().all()
@@ -269,6 +275,10 @@ async def get_research_session(
     if not session:
         raise HTTPException(status_code=404, detail="Research session not found")
 
+    if session.owner_id is not None:
+        if not user or (session.owner_id != user.id and not getattr(user, "is_admin", False)):
+            raise HTTPException(status_code=404, detail="Research session not found")
+
     return {
         "session": session.to_dict(),
         "sources": [s.to_dict() for s in (session.sources or [])],
@@ -290,8 +300,13 @@ async def get_session_problems(
     sess_check = await db.execute(
         select(ResearchSession).where(ResearchSession.id == session_id)
     )
-    if not sess_check.scalar_one_or_none():
+    session = sess_check.scalar_one_or_none()
+    if not session:
         raise HTTPException(status_code=404, detail="Research session not found")
+
+    if session.owner_id is not None:
+        if not user or (session.owner_id != user.id and not getattr(user, "is_admin", False)):
+            raise HTTPException(status_code=404, detail="Research session not found")
 
     result = await db.execute(
         select(ProblemCandidate)
@@ -543,6 +558,8 @@ async def validate_opportunity(
     Frontend can poll GET /api/research/sessions/{id}/status for live progress
     and retrieve GET /api/research/sessions/{id}/report when completed.
     """
+    await quota_service.check_quota(db, user, "research_session")
+
     session = ResearchSession(
         owner_id=user.id,
         query=body.query,
@@ -629,8 +646,9 @@ async def get_session_status(
     if not session:
         raise HTTPException(status_code=404, detail="Research session not found")
 
-    if user and session.owner_id and session.owner_id != user.id:
-        raise HTTPException(status_code=404, detail="Research session not found")
+    if session.owner_id is not None:
+        if not user or (session.owner_id != user.id and not getattr(user, "is_admin", False)):
+            raise HTTPException(status_code=404, detail="Research session not found")
 
     return {
         "session_id": session.id,
@@ -686,8 +704,9 @@ async def get_session_report(
     if not session:
         raise HTTPException(status_code=404, detail="Research session not found")
 
-    if user and session.owner_id and session.owner_id != user.id:
-        raise HTTPException(status_code=404, detail="Research session not found")
+    if session.owner_id is not None:
+        if not user or (session.owner_id != user.id and not getattr(user, "is_admin", False)):
+            raise HTTPException(status_code=404, detail="Research session not found")
 
     if session.report:
         return {"report": session.report.to_dict()}
@@ -725,8 +744,9 @@ async def get_report_by_id(
     if not report:
         raise HTTPException(status_code=404, detail="Research report not found")
 
-    if user and report.owner_id and report.owner_id != user.id:
-        raise HTTPException(status_code=404, detail="Research report not found")
+    if report.owner_id is not None:
+        if not user or (report.owner_id != user.id and not getattr(user, "is_admin", False)):
+            raise HTTPException(status_code=404, detail="Research report not found")
 
     return {"report": report.to_dict()}
 
@@ -750,8 +770,9 @@ async def get_report_blueprint_preview(
     if not report:
         raise HTTPException(status_code=404, detail="Research report not found")
 
-    if user and report.owner_id and report.owner_id != user.id:
-        raise HTTPException(status_code=404, detail="Research report not found")
+    if report.owner_id is not None:
+        if not user or (report.owner_id != user.id and not getattr(user, "is_admin", False)):
+            raise HTTPException(status_code=404, detail="Research report not found")
 
     from backend.services.research_blueprint_adapter import research_blueprint_adapter
     blueprint = await research_blueprint_adapter.generate_research_grounded_blueprint(

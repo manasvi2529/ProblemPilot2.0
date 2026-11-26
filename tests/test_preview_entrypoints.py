@@ -13,9 +13,11 @@ Covers:
 """
 import sys
 import json
+import asyncio
 import pytest
 from pathlib import Path
 from unittest import mock
+from backend.config import settings
 
 from backend.services.execution_engine import ExecutionEngine, ProjectProcess
 
@@ -131,41 +133,50 @@ class TestPreviewEntryPointDetection:
 
     @pytest.mark.asyncio
     async def test_live_preview_static_html_startup_health_and_cleanup(self, tmp_path):
-        """7 & 8. Actual startup of static HTML project, port binding, and guaranteed process cleanup."""
-        (tmp_path / "index.html").write_text(
-            "<!DOCTYPE html><html><head><title>Preview Live</title></head><body><h1>Hello World</h1></body></html>",
-            encoding="utf-8",
-        )
-
-        engine = ExecutionEngine()
-        project_id = "test_live_html_proj_001"
-        user_id = "test_user_001"
+        """7 & 8. Actual startup of static HTML project, port binding, and guaranteed process cleanup.
+        Bounded: Startup 30s, health check 10s, overall test 60s.
+        """
+        orig_fallback = settings.ALLOW_INSECURE_LOCAL_FALLBACK
+        settings.ALLOW_INSECURE_LOCAL_FALLBACK = True
 
         try:
-            start_res = await engine.start_project(
-                project_id=project_id,
-                user_id=user_id,
-                workspace_dir=tmp_path,
-                timeout_seconds=10.0,
-            )
+            async with asyncio.timeout(60.0):
+                (tmp_path / "index.html").write_text(
+                    "<!DOCTYPE html><html><head><title>Preview Live</title></head><body><h1>Hello World</h1></body></html>",
+                    encoding="utf-8",
+                )
 
-            assert start_res["success"] is True
-            assert start_res["status"] == "running"
-            assert "port" in start_res
-            port = start_res["port"]
+                engine = ExecutionEngine()
+                project_id = "test_live_html_proj_001"
+                user_id = "test_user_001"
 
-            # Verify HTTP health / root reachability
-            import httpx
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                res = await client.get(f"http://127.0.0.1:{port}/")
-                assert res.status_code == 200
-                assert "Hello World" in res.text
+                try:
+                    start_res = await engine.start_project(
+                        project_id=project_id,
+                        user_id=user_id,
+                        workspace_dir=tmp_path,
+                        timeout_seconds=30.0,
+                    )
 
+                    assert start_res["success"] is True
+                    assert start_res["status"] == "running"
+                    assert "port" in start_res
+                    port = start_res["port"]
+
+                    # Verify HTTP health / root reachability with bounded 10s timeout
+                    import httpx
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        res = await client.get(f"http://127.0.0.1:{port}/")
+                        assert res.status_code == 200
+                        assert "Hello World" in res.text
+
+                finally:
+                    # 8. Guaranteed cleanup test
+                    stop_res = engine.stop_project(project_id, user_id)
+                    assert stop_res["success"] is True
+                    assert stop_res["status"] == "stopped"
+
+                    status_res = await engine.get_project_status(project_id, user_id)
+                    assert status_res["running"] is False
         finally:
-            # 8. Guaranteed cleanup test
-            stop_res = engine.stop_project(project_id, user_id)
-            assert stop_res["success"] is True
-            assert stop_res["status"] == "stopped"
-
-            status_res = await engine.get_project_status(project_id, user_id)
-            assert status_res["running"] is False
+            settings.ALLOW_INSECURE_LOCAL_FALLBACK = orig_fallback

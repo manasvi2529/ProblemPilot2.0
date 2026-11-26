@@ -22,6 +22,16 @@ class User(Base):
     # Operating mode preference: autonomous | guided | hybrid
     operating_mode: Mapped[str] = mapped_column(String(20), default="hybrid")
 
+    # Authorization role: 'user' | 'admin'
+    role: Mapped[str] = mapped_column(String(20), default="user")
+
+    # Quota tier: 'free' | 'pro' | 'enterprise'
+    tier: Mapped[str] = mapped_column(String(20), default="free")
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
     # Settings stored as JSON
     preferences: Mapped[dict] = mapped_column(JSON, default=dict)
 
@@ -53,6 +63,9 @@ class User(Base):
             "full_name": self.full_name,
             "name": self.full_name or self.username,
             "operating_mode": self.operating_mode,
+            "role": self.role,
+            "tier": self.tier,
+            "is_admin": self.is_admin,
             "is_active": self.is_active,
             "created_at": safe_iso(self.created_at),
             "github_connected": bool(self.github_access_token),

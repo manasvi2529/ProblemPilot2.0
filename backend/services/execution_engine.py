@@ -26,6 +26,7 @@ from collections import deque
 import httpx
 
 from backend.config import settings
+from backend.services.container_engine import ContainerSandboxEngine
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ class ProjectProcess:
         self.started_at: Optional[datetime] = None
         self.stopped_at: Optional[datetime] = None
         self.pid: Optional[int] = None
+        self.container_name: Optional[str] = None
+        self.is_container: bool = False
         self.health_url = f"http://127.0.0.1:{port}/api/v1/health"
         self.root_url = f"http://127.0.0.1:{port}/"
 
@@ -254,15 +257,14 @@ class ExecutionEngine:
         user_id: str,
         workspace_dir: Path,
         preferred_port: Optional[int] = None,
-        timeout_seconds: float = 20.0,
+        timeout_seconds: float = 30.0,
     ) -> Dict[str, Any]:
         """
         Launch the project inside an isolated background subprocess,
         probe its health endpoint, and transition to running state.
+        Bounded timeouts: Startup max 30s, health probe polling max 10s.
         """
-        print(f"DEBUG: start_project entering for {project_id}", flush=True)
         workspace_dir = Path(workspace_dir).resolve()
-        print(f"DEBUG: resolved workspace_dir {workspace_dir}", flush=True)
         if not workspace_dir.exists():
             return {
                 "success": False,
@@ -270,12 +272,9 @@ class ExecutionEngine:
                 "error": f"Workspace directory does not exist: {workspace_dir}",
             }
 
-        print("DEBUG: calling detect_entry_point", flush=True)
         entry_point = self.detect_entry_point(workspace_dir)
-        print(f"DEBUG: detect_entry_point returned {entry_point}", flush=True)
         if not entry_point:
             checked_files = [f.name for f in workspace_dir.iterdir() if f.is_file()][:15] if workspace_dir.exists() else []
-            print(f"DEBUG: checked_files: {checked_files}", flush=True)
             if not checked_files:
                 return {
                     "success": False,
@@ -289,7 +288,6 @@ class ExecutionEngine:
                 f"Node.js/React/Next.js (package.json), and Static Web (index.html). "
                 f"Files present: {checked_files if checked_files else 'empty directory'}."
             )
-            print("DEBUG: returning failed diagnostic_msg", flush=True)
             return {
                 "success": False,
                 "status": "failed",
@@ -329,6 +327,28 @@ class ExecutionEngine:
             except Exception as e:
                 logger.warning(f"Could not patch port in {entry_file}: {e}")
 
+        # Execution mode evaluation: Docker Container vs Local Dev Subprocess
+        mode = getattr(settings, "EXECUTION_MODE", "auto")
+        docker_ready = ContainerSandboxEngine.is_docker_available()
+
+        if mode == "docker" or (mode == "auto" and not getattr(settings, "ALLOW_INSECURE_LOCAL_FALLBACK", False)):
+            if not docker_ready:
+                proc_obj.status = "failed"
+                proc_obj.error_message = (
+                    "CONTAINER_EXECUTION_UNAVAILABLE: Docker daemon is not running or not installed on the host. "
+                    "In compliance with production security policy, untrusted public code execution is blocked. "
+                    "To enable restricted local execution for internal testing, set ALLOW_INSECURE_LOCAL_FALLBACK=True in .env."
+                )
+                logger.error(f"Blocked preview startup for project {project_id}: {proc_obj.error_message}")
+                return {
+                    "success": False,
+                    "status": "blocked",
+                    "error": proc_obj.error_message,
+                    "execution_mode": "docker",
+                    "docker_available": False,
+                    "port": port,
+                }
+
         # Start process with sanitized environment
         env = self.sanitize_environment(port, workspace_dir)
 
@@ -342,16 +362,37 @@ class ExecutionEngine:
         cmd, runtime_type = self.determine_runtime_command(workspace_dir, entry_point, port)
 
         try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(workspace_dir),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                creationflags=creationflags,
-            )
+            if docker_ready:
+                # Launch via hardened Docker container
+                container_name = f"p2p-sandbox-{project_id[:12]}-{port}"
+                proc_obj.container_name = container_name
+                proc_obj.is_container = True
+                docker_args = ContainerSandboxEngine.build_docker_run_args(
+                    container_name=container_name,
+                    workspace_dir=workspace_dir,
+                    port=port,
+                    cmd=cmd,
+                )
+                proc = subprocess.Popen(
+                    docker_args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    creationflags=creationflags,
+                )
+            else:
+                # Explicit local dev fallback
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(workspace_dir),
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    creationflags=creationflags,
+                )
             proc_obj.process = proc
             proc_obj.pid = proc.pid
 
@@ -395,8 +436,10 @@ class ExecutionEngine:
             }
 
         # Probe health check until successful or timeout
+        # Bounded timeouts: Startup max 30s, health check probe max 10s
+        health_poll_timeout = min(10.0, max(1.0, timeout_seconds))
         poll_interval = 0.4
-        max_attempts = int(timeout_seconds / poll_interval)
+        max_attempts = max(1, int(health_poll_timeout / poll_interval))
         healthy = False
 
         async with httpx.AsyncClient(timeout=2.0) as client:
@@ -444,8 +487,10 @@ class ExecutionEngine:
                 "started_at": proc_obj.started_at.isoformat(),
             }
         else:
+            # Terminate and clean up process on probe timeout
+            self._stop_process_instance(proc_obj)
             proc_obj.status = "failed"
-            proc_obj.error_message = f"Health check probe timed out after {timeout_seconds}s at {proc_obj.health_url}"
+            proc_obj.error_message = f"Health check probe timed out after {health_poll_timeout:.1f}s at {proc_obj.health_url}"
             return {
                 "success": False,
                 "status": "failed",
@@ -455,7 +500,10 @@ class ExecutionEngine:
             }
 
     def _stop_process_instance(self, proc_obj: ProjectProcess):
-        """Helper to terminate a running process instance cleanly."""
+        """Helper to terminate a running process or container instance cleanly."""
+        if proc_obj.is_container and proc_obj.container_name:
+            ContainerSandboxEngine.stop_container(proc_obj.container_name)
+
         if proc_obj.process and proc_obj.is_alive():
             pid = proc_obj.pid
             try:
@@ -568,6 +616,22 @@ class ExecutionEngine:
             "logs": logs,
             "total": len(logs),
         }
+
+    def get_active_processes_for_user(self, user_id: str) -> List[ProjectProcess]:
+        """Return all currently active running process objects owned by user_id."""
+        with self._lock:
+            return [
+                p for p in self._processes.values()
+                if p.user_id == user_id and p.is_alive() and p.status in ("starting", "running")
+            ]
+
+    def get_all_active_processes(self) -> List[ProjectProcess]:
+        """Admin helper: return all running sandbox processes."""
+        with self._lock:
+            return [
+                p for p in self._processes.values()
+                if p.is_alive() and p.status in ("starting", "running")
+            ]
 
     def cleanup_all(self):
         """Reap and kill all active subprocesses on shutdown."""
