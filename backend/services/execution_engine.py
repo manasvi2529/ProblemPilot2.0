@@ -12,6 +12,8 @@ Responsibilities:
 """
 import os
 import sys
+import re
+import json
 import socket
 import logging
 import asyncio
@@ -113,11 +115,112 @@ class ExecutionEngine:
 
     @staticmethod
     def detect_entry_point(workspace_dir: Path) -> Optional[str]:
-        """Identify main application entry point."""
-        for candidate in ("server.py", "app.py", "main.py"):
+        """
+        Identify main application entry point across all supported application archetypes:
+        1. Python FastAPI / ASGI: server.py, app.py, main.py, api.py, wsgi.py
+        2. Static web applications: index.html
+        3. Node.js / React / Next.js: package.json
+        """
+        workspace_dir = Path(workspace_dir).resolve()
+        if not workspace_dir.exists():
+            return None
+
+        # 1. Python server files
+        for candidate in ("server.py", "app.py", "main.py", "api.py", "wsgi.py"):
             if (workspace_dir / candidate).exists():
                 return candidate
+
+        # 2. Node / React / Next.js
+        if (workspace_dir / "package.json").exists():
+            return "package.json"
+
+        # 3. Static Web Application (HTML5 / Vanilla JS)
+        if (workspace_dir / "index.html").exists():
+            return "index.html"
+
         return None
+
+    @classmethod
+    def determine_runtime_command(
+        cls,
+        workspace_dir: Path,
+        entry_point: str,
+        port: int,
+    ) -> tuple[List[str], str]:
+        """
+        Determine the exact runtime command and runtime type:
+        Returns: (command_args, runtime_type)
+        where runtime_type in ("fastapi", "python_http", "python_generic", "node", "static_http")
+        """
+        workspace_dir = Path(workspace_dir).resolve()
+        python_exec = sys.executable
+
+        # A. Static HTML website -> run python built-in static server
+        if entry_point == "index.html":
+            return [python_exec, "-m", "http.server", str(port), "--bind", "127.0.0.1"], "static_http"
+
+        # B. Node.js / React / Next.js application
+        if entry_point == "package.json":
+            pkg_file = workspace_dir / "package.json"
+            pkg_data = {}
+            try:
+                pkg_data = json.loads(pkg_file.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning(f"Failed to parse package.json in {workspace_dir}: {e}")
+
+            scripts = pkg_data.get("scripts", {})
+            npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
+
+            # Prefer 'dev' or 'start'
+            if "dev" in scripts:
+                return [npm_cmd, "run", "dev", "--", "-p", str(port)], "node"
+            elif "start" in scripts:
+                return [npm_cmd, "start", "--", "-p", str(port)], "node"
+            elif (workspace_dir / "server.js").exists():
+                node_cmd = "node.exe" if sys.platform == "win32" else "node"
+                return [node_cmd, "server.js"], "node"
+            else:
+                return [npm_cmd, "start"], "node"
+
+        # C. Python Application
+        if entry_point.endswith(".py"):
+            entry_file = workspace_dir / entry_point
+            content = ""
+            if entry_file.exists():
+                try:
+                    content = entry_file.read_text(encoding="utf-8", errors="ignore")
+                except Exception:
+                    pass
+
+            stem = Path(entry_point).stem
+
+            # Check if this is a FastAPI / ASGI app instance
+            has_fastapi_or_asgi = (
+                "FastAPI(" in content
+                or "Starlette(" in content
+                or re.search(r'\bapp\s*=\s*(?:FastAPI|Starlette)', content) is not None
+            )
+
+            # Check if uvicorn can run stem:app
+            if has_fastapi_or_asgi:
+                # Find app instance name if not 'app'
+                app_var_match = re.search(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:FastAPI|Starlette)', content)
+                app_var = app_var_match.group(1) if app_var_match else "app"
+                return [
+                    python_exec, "-m", "uvicorn", f"{stem}:{app_var}",
+                    "--host", "127.0.0.1",
+                    "--port", str(port),
+                ], "fastapi"
+
+            # Check if it has a __main__ block that starts a server
+            if 'if __name__ == "__main__":' in content or "if __name__ == '__main__':" in content:
+                return [python_exec, entry_point], "python_generic"
+
+            # Fallback for Python files: try uvicorn first, otherwise direct execution
+            return [python_exec, entry_point], "python_generic"
+
+        # D. Generic fallback
+        return [python_exec, entry_point], "unknown"
 
     @staticmethod
     def sanitize_environment(port: int, workspace_dir: Path) -> Dict[str, str]:
@@ -157,7 +260,9 @@ class ExecutionEngine:
         Launch the project inside an isolated background subprocess,
         probe its health endpoint, and transition to running state.
         """
+        print(f"DEBUG: start_project entering for {project_id}", flush=True)
         workspace_dir = Path(workspace_dir).resolve()
+        print(f"DEBUG: resolved workspace_dir {workspace_dir}", flush=True)
         if not workspace_dir.exists():
             return {
                 "success": False,
@@ -165,12 +270,35 @@ class ExecutionEngine:
                 "error": f"Workspace directory does not exist: {workspace_dir}",
             }
 
+        print("DEBUG: calling detect_entry_point", flush=True)
         entry_point = self.detect_entry_point(workspace_dir)
+        print(f"DEBUG: detect_entry_point returned {entry_point}", flush=True)
         if not entry_point:
+            checked_files = [f.name for f in workspace_dir.iterdir() if f.is_file()][:15] if workspace_dir.exists() else []
+            print(f"DEBUG: checked_files: {checked_files}", flush=True)
+            if not checked_files:
+                return {
+                    "success": False,
+                    "status": "not_started",
+                    "error": "Your application has not been built yet. Complete the Build stage before starting Preview.",
+                    "not_built": True,
+                }
+            diagnostic_msg = (
+                f"No runnable entry point found in workspace '{workspace_dir.name}'. "
+                f"Checked runtimes: FastAPI/ASGI (server.py, app.py, main.py, api.py), "
+                f"Node.js/React/Next.js (package.json), and Static Web (index.html). "
+                f"Files present: {checked_files if checked_files else 'empty directory'}."
+            )
+            print("DEBUG: returning failed diagnostic_msg", flush=True)
             return {
                 "success": False,
                 "status": "failed",
-                "error": "No runnable entry point found (expected server.py, app.py, or main.py).",
+                "error": diagnostic_msg,
+                "diagnostics": {
+                    "workspace": str(workspace_dir),
+                    "checked_runtimes": ["fastapi", "python_http", "node", "static_http"],
+                    "files_present": checked_files,
+                },
             }
 
         with self._lock:
@@ -189,21 +317,20 @@ class ExecutionEngine:
             )
             self._processes[project_id] = proc_obj
 
-        # Patch port in entry point script if explicitly bound
+        # Patch port in Python entry point script if explicitly bound
         entry_file = workspace_dir / entry_point
-        try:
-            content = entry_file.read_text(encoding="utf-8")
-            # Replace default port references (e.g. port=8030 or port=8020) with our dynamic port
-            import re
-            patched = re.sub(r'port\s*=\s*\d+', f'port={port}', content)
-            if patched != content:
-                entry_file.write_text(patched, encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"Could not patch port in {entry_file}: {e}")
+        if entry_point.endswith(".py"):
+            try:
+                content = entry_file.read_text(encoding="utf-8")
+                # Replace default port references (e.g. port=8030 or port=8020) with our dynamic port
+                patched = re.sub(r'port\s*=\s*\d+', f'port={port}', content)
+                if patched != content:
+                    entry_file.write_text(patched, encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"Could not patch port in {entry_file}: {e}")
 
         # Start process with sanitized environment
         env = self.sanitize_environment(port, workspace_dir)
-        python_exec = sys.executable
 
         creationflags = 0
         if sys.platform == "win32":
@@ -212,8 +339,7 @@ class ExecutionEngine:
         proc_obj.status = "starting"
         proc_obj.started_at = datetime.now(timezone.utc)
 
-        stem = Path(entry_point).stem
-        cmd = [python_exec, "-m", "uvicorn", f"{stem}:app", "--host", "127.0.0.1", "--port", str(port)]
+        cmd, runtime_type = self.determine_runtime_command(workspace_dir, entry_point, port)
 
         try:
             proc = subprocess.Popen(

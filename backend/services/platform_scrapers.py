@@ -118,7 +118,7 @@ async def scrape_hackernews(query: str, limit: int = 15) -> list[dict]:
     Great for tech problems, developer pain points, startup ideas.
     """
     results = []
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=3.5) as client:
         try:
             # Algolia HN Search API — free, no key required
             url = "https://hn.algolia.com/api/v1/search"
@@ -148,35 +148,6 @@ async def scrape_hackernews(query: str, limit: int = 15) -> list[dict]:
         except Exception as e:
             logger.warning(f"HackerNews search failed: {e}")
 
-    # Also search "Ask HN" posts — these often contain real problems
-    async with httpx.AsyncClient(timeout=15) as client:
-        try:
-            url = "https://hn.algolia.com/api/v1/search"
-            params = {
-                "query": query,
-                "tags": "ask_hn",
-                "hitsPerPage": 10,
-            }
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-
-            for hit in data.get("hits", []):
-                results.append({
-                    "platform": "hackernews",
-                    "title": hit.get("title", ""),
-                    "content": hit.get("story_text", "") or "",
-                    "url": f"https://news.ycombinator.com/item?id={hit.get('objectID', '')}",
-                    "hn_url": f"https://news.ycombinator.com/item?id={hit.get('objectID', '')}",
-                    "author": hit.get("author", ""),
-                    "score": hit.get("points", 0),
-                    "num_comments": hit.get("num_comments", 0),
-                    "created_at": hit.get("created_at", ""),
-                    "retrieved_at": datetime.now(timezone.utc).isoformat(),
-                })
-        except Exception as e:
-            logger.warning(f"HN Ask search failed: {e}")
-
     return results
 
 
@@ -190,7 +161,7 @@ async def scrape_stackoverflow(query: str, limit: int = 10) -> list[dict]:
     Uses the public SE API — no key needed (limited to 300 req/day without key).
     """
     results = []
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=3.5) as client:
         try:
             url = "https://api.stackexchange.com/2.3/search/advanced"
             params = {

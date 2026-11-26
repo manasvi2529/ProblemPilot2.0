@@ -149,6 +149,13 @@ async def search_brave(query: str, num_results: int = 10) -> list[dict]:
 
 # ── Provider Dispatch ────────────────────────────────────────────────────────
 
+from backend.services.search_providers import (
+    SearchDispatcher,
+    safe_fetch_page_content,
+    SearchResult,
+    SearchDispatchResult,
+)
+
 SEARCH_PROVIDERS = {
     "google_custom": search_google_custom,
     "serper": search_serper,
@@ -158,62 +165,33 @@ SEARCH_PROVIDERS = {
 
 async def perform_web_search(query: str, num_results: int = 10) -> tuple[list[dict], str, bool]:
     """
-    Execute web search using configured provider.
+    Execute web search using configured provider dispatcher with auto-failover.
     Returns: (results, provider_name, is_live)
     """
-    provider = settings.SEARCH_PROVIDER
-    search_fn = SEARCH_PROVIDERS.get(provider)
-
-    if not search_fn or not settings.search_configured:
-        logger.warning(f"Search provider '{provider}' not configured. Returning empty results.")
-        return [], provider, False
-
-    try:
-        results = await search_fn(query, num_results)
-        return results, provider, True
-    except Exception as e:
-        logger.error(f"Search failed with provider '{provider}': {e}")
-        return [], provider, False
+    dispatcher = SearchDispatcher()
+    res = await dispatcher.search(query, num_results=num_results)
+    is_live = (res.search_mode == "live" and len(res.results) > 0)
+    provider_name = res.providers_attempted[-1] if res.providers_attempted else settings.SEARCH_PROVIDER
+    return [r.to_dict() for r in res.results], provider_name, is_live
 
 
 # ── Page Content Extraction ──────────────────────────────────────────────────
 
 async def fetch_page_content(url: str, max_chars: int = 15000) -> dict:
-    """Fetch and extract text content from a web page."""
+    """Fetch and extract text content from a web page using hardened SSRF guard."""
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.get(url, headers={
-                "User-Agent": "Problem2ProjectAI/1.0 Research Bot"
-            })
-            resp.raise_for_status()
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Remove scripts and styles
-        for tag in soup(["script", "style", "nav", "footer", "header"]):
-            tag.decompose()
-
-        text = soup.get_text(separator="\n", strip=True)
-        # Truncate
+        page = await safe_fetch_page_content(url)
+        text = page.text_content
         if len(text) > max_chars:
             text = text[:max_chars] + "... [truncated]"
-
-        # Try to find publication date
-        pub_date = None
-        for meta in soup.find_all("meta"):
-            prop = meta.get("property", "") or meta.get("name", "")
-            if "date" in prop.lower() or "published" in prop.lower():
-                pub_date = meta.get("content", "")
-                break
-
         return {
             "text": text,
-            "title": soup.title.string if soup.title else "",
-            "publication_date": pub_date,
+            "title": page.title,
+            "publication_date": None,
             "success": True,
         }
     except Exception as e:
-        logger.warning(f"Failed to fetch {url}: {e}")
+        logger.warning(f"Failed to fetch {url} via SSRF guard: {e}")
         return {"text": "", "title": "", "publication_date": None, "success": False, "error": str(e)}
 
 
@@ -387,15 +365,14 @@ Analyze these sources and identify 3-5 distinct real-world problems. For each pr
 4. "existing_solutions": Current solutions and their limitations (string)
 5. "solution_gaps": What's missing from current solutions (string)
 6. "evidence_summary": Key evidence from the sources (string)
-7. "claim_type": One of "verified_fact", "source_backed", "inference", "hypothesis"
-8. "scores": An object with these dimensions, each having "score" (0-10), "explanation", and "confidence" ("high"/"medium"/"low"):
-   - "severity": How serious is the problem
-   - "scale": How many people are affected
-   - "evidence_strength": How well-supported by sources
-   - "urgency": How time-sensitive
-   - "feasibility": How feasible to build a solution
-   - "differentiation": How much room for a better solution
-   - "effort": Estimated development effort (10=easy, 0=very hard)
+7. "claim_type": One of "verified_fact", "source_backed", "market_trend", "inference", "hypothesis"
+8. "scores": An object with these exactly 6 canonical dimensions, each having "score" (0-10), "explanation", and "confidence" ("high"/"medium"/"low"):
+   - "problem_severity": Seriousness of the user pain point and cost of inaction (weight 0.20)
+   - "evidence_of_demand": Volume and reliability of real complaints and demand indicators (weight 0.20)
+   - "market_opportunity": Overall commercial and user adoption headroom (weight 0.20)
+   - "competition_intensity": Level of market crowdedness vs open gap (weight 0.15)
+   - "feasibility": Technical deliverability as a web MVP (weight 0.15)
+   - "differentiation_potential": Distinct architectural/UX leverage over generic tools (weight 0.10)
 9. "evidence_gaps": Array of strings — what evidence is missing
 10. "contradictions": Array of strings — any conflicting evidence found
 
@@ -409,14 +386,12 @@ Return ONLY a valid JSON array. No markdown, no explanation outside the JSON."""
 
 
 def build_scoring_weights() -> dict:
-    """Default scoring weights for opportunity evaluation."""
+    """Canonical 6-dimension scoring weights for opportunity evaluation."""
     return {
-        "severity": 0.15,
-        "scale": 0.12,
-        "evidence_strength": 0.15,
-        "urgency": 0.10,
+        "problem_severity": 0.20,
+        "evidence_of_demand": 0.20,
+        "market_opportunity": 0.20,
+        "competition_intensity": 0.15,
         "feasibility": 0.15,
-        "differentiation": 0.13,
-        "effort": 0.10,
-        "data_availability": 0.10,
+        "differentiation_potential": 0.10,
     }

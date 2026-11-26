@@ -212,13 +212,32 @@ class AgentOrchestrator:
         if not project:
             raise ValueError("Project not found")
 
-        # If user passed custom tech stack, honor it
-        blueprint = await self.project_architect.generate_blueprint(
-            project.name,
-            project.description,
-            tech_stack=tech_stack,
-            custom_instructions=custom_instructions,
-        )
+        # If project is linked to research report, synthesize research-grounded blueprint
+        if getattr(project, "research_report_id", None):
+            from backend.models.research import ResearchReport
+            from backend.services.research_blueprint_adapter import research_blueprint_adapter
+            rep_res = await db.execute(select(ResearchReport).where(ResearchReport.id == project.research_report_id))
+            report = rep_res.scalar_one_or_none()
+            if report:
+                blueprint = await research_blueprint_adapter.generate_research_grounded_blueprint(
+                    report=report,
+                    tech_stack=tech_stack,
+                    custom_instructions=custom_instructions,
+                )
+            else:
+                blueprint = await self.project_architect.generate_blueprint(
+                    project.name,
+                    project.description,
+                    tech_stack=tech_stack,
+                    custom_instructions=custom_instructions,
+                )
+        else:
+            blueprint = await self.project_architect.generate_blueprint(
+                project.name,
+                project.description,
+                tech_stack=tech_stack,
+                custom_instructions=custom_instructions,
+            )
         project.blueprint = blueprint
         project.tech_stack = blueprint.get("tech_stack", tech_stack or {})
         project.status = "planning"

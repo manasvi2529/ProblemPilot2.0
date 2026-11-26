@@ -350,6 +350,45 @@ async def generate_blueprint(
     }
 
 
+@router.get("/{project_id}/research-intelligence")
+async def get_project_research_intelligence(
+    project_id: str,
+    user: User = Depends(get_user_from_token),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve deep research intelligence, citations, and competitor gaps for a project."""
+    res = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == user.id))
+    project = res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    from backend.models.research import ResearchReport
+    report = None
+    if project.research_report_id:
+        rep_res = await db.execute(select(ResearchReport).where(ResearchReport.id == project.research_report_id))
+        report = rep_res.scalar_one_or_none()
+
+    bp_intel = (project.blueprint or {}).get("research_intelligence", {})
+
+    if not report and not bp_intel:
+        return {
+            "has_research": False,
+            "project_id": project.id,
+            "report_id": None,
+            "report": None,
+            "research_intelligence": {},
+            "message": "Project was created independently without linked research report.",
+        }
+
+    return {
+        "has_research": True,
+        "project_id": project.id,
+        "report_id": project.research_report_id,
+        "report": report.to_dict() if report else None,
+        "research_intelligence": bp_intel,
+    }
+
+
 @router.get("/{project_id}/state")
 async def get_project_state(
     project_id: str,

@@ -59,6 +59,7 @@ export function Navbar() {
       badge: pendingApprovals > 0 ? pendingApprovals : undefined
     },
     { label: 'Evidence & Research', href: '/research', icon: Compass },
+    { label: 'Benchmarks', href: '/benchmarks', icon: Activity },
     { label: 'Deployments', href: '/deployments', icon: CloudLightning },
   ];
 

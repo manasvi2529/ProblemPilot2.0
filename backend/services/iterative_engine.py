@@ -110,12 +110,28 @@ class ChangePlanner:
             for name, content in existing_files.items()
         )
 
+        research_intel = blueprint.get("research_intelligence", {})
+        research_context = ""
+        if research_intel and research_intel.get("is_research_backed"):
+            findings_summary = "\n".join(
+                f"- [{req.get('evidence_classification', 'inference')}] {req.get('feature_name')}: {req.get('originating_finding')}"
+                for req in research_intel.get("traceability_matrix", [])[:6]
+            )
+            research_context = f"""
+Research-Grounded Intelligence & Evidence:
+This project is backed by verified market research:
+- Evidence Sufficiency: {research_intel.get('evidence_sufficiency', 'moderate')}
+- Target Audience & Core Findings:
+{findings_summary}
+Ensure modifications respect these validated pain points and do not introduce generic boilerplate.
+"""
+
         prompt = f"""You are an Expert Full-Stack Software Architect and Code Modification Planner.
 A developer has requested changes to their running software project:
 
 Project Name: "{project_name}" (Category: {category})
 Developer's Request: "{instruction}"
-
+{research_context}
 Existing Workspace Files:
 {file_summaries}
 

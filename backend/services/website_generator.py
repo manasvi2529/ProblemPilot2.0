@@ -30,6 +30,14 @@ class WebsiteGenerator:
         Main entrypoint: inspects blueprint category and user requirements to generate
         genuinely different, fully functioning projects.
         """
+        if isinstance(blueprint, str):
+            try:
+                blueprint = json.loads(blueprint)
+            except Exception:
+                blueprint = {}
+        elif not isinstance(blueprint, dict):
+            blueprint = {}
+
         category = blueprint.get("project_category", "general_webapp")
         desc = blueprint.get("project_description", blueprint.get("detailed_context", ""))
         title = project_name or blueprint.get("project_name", "Web Application")
@@ -4739,6 +4747,35 @@ CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8030"]
         table_name = tables[0].get("table", "records") if tables else "records"
         entity_name = table_name[:-1] if table_name.endswith("s") else table_name
 
+        # Extract research intelligence if present
+        intel = blueprint.get("research_intelligence", {})
+        pains = intel.get("pain_points_addressed", [])
+        gaps = intel.get("competitor_gaps_exploited", [])
+        viability_score = intel.get("overall_score")
+        
+        research_banner_html = ""
+        if intel:
+            score_text = f" • Viability Score: {viability_score}/10" if viability_score else ""
+            diff_text = gaps[0].get("our_advantage", "") if gaps else ""
+            research_banner_html = f"""
+        <div class="research-grounding-card">
+            <div class="intel-tag">🔬 Market Research Grounded{score_text}</div>
+            <p class="intel-sub">Directly engineered to solve validated user pain points and outperform incumbent solutions.</p>
+            {f'<div class="intel-moat"><strong>Competitive Moat:</strong> {diff_text}</div>' if diff_text else ''}
+        </div>"""
+
+        # Generate seed statements
+        seed_inserts = []
+        if pains:
+            for idx, p in enumerate(pains[:4]):
+                p_title = json.dumps(p.get("pain_point", f"Requirement {idx+1}")[:100])
+                p_desc = json.dumps(p.get("feature_solution", "Automated solution")[:200])
+                seed_inserts.append(f'cursor.execute("INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?)", ("rec-{idx+1}", {p_title}, {p_desc}, "active", now_str))')
+        else:
+            seed_inserts.append(f'cursor.execute("INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?)", ("rec-1", "Initial System Record", "Created during workspace bootstrap", "active", now_str))')
+
+        seed_code = "\n        ".join(seed_inserts)
+
         index_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4751,6 +4788,7 @@ CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8030"]
     <header class="app-header">
         <h1>{clean_title}</h1>
         <p class="subtitle">{desc}</p>
+        {research_banner_html}
     </header>
     <main class="container">
         <section class="card">
@@ -4773,7 +4811,11 @@ CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8030"]
 .btn { padding: 10px 18px; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; }
 .btn-primary { background: #6366f1; color: white; }
 .records-grid { display: grid; gap: 12px; }
-.record-item { background: #0f172a; padding: 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); }"""
+.record-item { background: #0f172a; padding: 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); }
+.research-grounding-card { background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 10px; padding: 14px; max-width: 650px; margin: 16px auto 0 auto; text-align: left; }
+.intel-tag { font-size: 0.75rem; font-weight: 700; color: #818cf8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+.intel-sub { font-size: 0.85rem; color: #cbd5e1; margin: 0 0 8px 0; }
+.intel-moat { font-size: 0.8rem; color: #34d399; background: rgba(52, 211, 153, 0.1); padding: 6px 10px; border-radius: 6px; }"""
 
         app_js = """document.addEventListener('DOMContentLoaded', async () => {
     const container = document.getElementById('records-container');
@@ -4784,7 +4826,7 @@ CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8030"]
             container.innerHTML = (data.items || []).map(r => `
                 <div class="record-item">
                     <strong>${r.title || r.name}</strong>
-                    <span style="color:#94a3b8; display:block; font-size:0.85rem">${r.description || r.status || ''}</span>
+                    <span style="color:#94a3b8; display:block; font-size:0.85rem; margin-top:4px;">${r.description || r.status || ''}</span>
                 </div>
             `).join('') || '<p style="color:#64748b">No records created yet.</p>';
         }
@@ -4812,9 +4854,8 @@ def init_db():
     )''')
     cursor.execute("SELECT COUNT(*) FROM {table_name}")
     if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO {table_name} VALUES (?, ?, ?, ?, ?)",
-            ("rec-1", "Initial System Record", "Created during workspace bootstrap", "active", datetime.now(timezone.utc).isoformat())
-        )
+        now_str = datetime.now(timezone.utc).isoformat()
+        {seed_code}
     conn.commit()
     conn.close()
 

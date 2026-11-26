@@ -48,7 +48,7 @@ async def get_db() -> AsyncSession:
 async def init_db():
     """Create all tables, migrate schema additions, and seed default workspace user on startup."""
     async with engine.begin() as conn:
-        from backend.models import user, project, research, approval, audit, deployment  # noqa
+        from backend.models import user, project, research, approval, audit, deployment, benchmark  # noqa
         await conn.run_sync(Base.metadata.create_all)
 
         # Automatic lightweight schema migration for existing SQLite databases
@@ -79,6 +79,53 @@ async def init_db():
                 project_cols = {row[1] for row in project_res}
                 if "current_stage" not in project_cols:
                     connection.exec_driver_sql("ALTER TABLE projects ADD COLUMN current_stage VARCHAR(30) DEFAULT 'architect'")
+                if "research_report_id" not in project_cols:
+                    connection.exec_driver_sql("ALTER TABLE projects ADD COLUMN research_report_id VARCHAR(36) REFERENCES research_reports(id)")
+
+                # Check research_sessions table columns
+                session_res = connection.exec_driver_sql("PRAGMA table_info(research_sessions)").fetchall()
+                session_cols = {row[1] for row in session_res}
+                new_session_cols = [
+                    ("progress_pct", "INTEGER DEFAULT 0"),
+                    ("current_step", "VARCHAR(100) DEFAULT 'queued'"),
+                    ("step_message", "TEXT DEFAULT ''"),
+                    ("search_mode", "VARCHAR(30) DEFAULT 'curated_fallback'"),
+                    ("providers_attempted", "JSON DEFAULT '[]'"),
+                    ("providers_diagnostics", "JSON DEFAULT '{}'"),
+                    ("failover_occurred", "BOOLEAN DEFAULT 0"),
+                ]
+                for col_name, col_type in new_session_cols:
+                    if col_name not in session_cols:
+                        connection.exec_driver_sql(f"ALTER TABLE research_sessions ADD COLUMN {col_name} {col_type}")
+
+                # Check research_sources table columns (Phase 1.7)
+                source_res = connection.exec_driver_sql("PRAGMA table_info(research_sources)").fetchall()
+                source_cols = {row[1] for row in source_res}
+                new_source_cols = [
+                    ("provider", "VARCHAR(50) DEFAULT 'unknown'"),
+                    ("is_live", "BOOLEAN DEFAULT 0"),
+                    ("content_extracted", "BOOLEAN DEFAULT 0"),
+                    ("raw_snippet", "TEXT DEFAULT ''"),
+                    ("retrieval_status", "VARCHAR(30) DEFAULT 'success'"),
+                    ("extraction_error", "TEXT"),
+                    ("supporting_passage", "TEXT DEFAULT ''"),
+                ]
+                for col_name, col_type in new_source_cols:
+                    if col_name not in source_cols:
+                        connection.exec_driver_sql(f"ALTER TABLE research_sources ADD COLUMN {col_name} {col_type}")
+
+                # Check research_reports table columns (Phase 1.7)
+                report_res = connection.exec_driver_sql("PRAGMA table_info(research_reports)").fetchall()
+                report_cols = {row[1] for row in report_res}
+                new_report_cols = [
+                    ("search_mode", "VARCHAR(30) DEFAULT 'curated_fallback'"),
+                    ("providers_diagnostics", "JSON DEFAULT '{}'"),
+                    ("supporting_passages", "JSON DEFAULT '{}'"),
+                    ("contradictions", "JSON DEFAULT '[]'"),
+                ]
+                for col_name, col_type in new_report_cols:
+                    if col_name not in report_cols:
+                        connection.exec_driver_sql(f"ALTER TABLE research_reports ADD COLUMN {col_name} {col_type}")
 
                 # Remove legacy hardcoded development user from disk database
                 connection.exec_driver_sql("DELETE FROM users WHERE email = 'developer@problempilot.ai' AND id = 'default-dev-user-0001'")

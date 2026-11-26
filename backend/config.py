@@ -44,9 +44,13 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: Optional[str] = None
 
     # Web Search
-    SEARCH_PROVIDER: str = "google_custom"  # google_custom | serper | brave
+    SEARCH_PROVIDER: str = "auto"  # auto | serper | brave | google_custom
     SEARCH_API_KEY: Optional[str] = None
     SEARCH_ENGINE_ID: Optional[str] = None
+    SERPER_API_KEY: Optional[str] = None
+    BRAVE_SEARCH_API_KEY: Optional[str] = None
+    GOOGLE_SEARCH_API_KEY: Optional[str] = None
+    GOOGLE_SEARCH_ENGINE_ID: Optional[str] = None
 
     # GitHub Integration
     GITHUB_CLIENT_ID: Optional[str] = None
@@ -99,11 +103,77 @@ class Settings(BaseSettings):
         return bool(self.OPENROUTER_API_KEY or self.effective_google_api_key or self.ANTHROPIC_API_KEY)
 
     @property
+    def effective_serper_key(self) -> Optional[str]:
+        key = self.SERPER_API_KEY or (self.SEARCH_API_KEY if self.SEARCH_PROVIDER == "serper" else None)
+        if key and key not in ("your-serper-api-key-here", ""):
+            return key
+        return None
+
+    @property
+    def effective_brave_key(self) -> Optional[str]:
+        key = self.BRAVE_SEARCH_API_KEY or (self.SEARCH_API_KEY if self.SEARCH_PROVIDER == "brave" else None)
+        if key and key not in ("your-brave-api-key-here", ""):
+            return key
+        return None
+
+    @property
+    def effective_google_search_key(self) -> Optional[str]:
+        key = self.GOOGLE_SEARCH_API_KEY or (self.SEARCH_API_KEY if self.SEARCH_PROVIDER == "google_custom" else None)
+        if key and key not in ("your-search-api-key-here", ""):
+            return key
+        return None
+
+    @property
+    def effective_google_search_engine_id(self) -> Optional[str]:
+        cx = self.GOOGLE_SEARCH_ENGINE_ID or self.SEARCH_ENGINE_ID
+        if cx and cx not in ("your-search-engine-id-here", "your-google-cse-id-here", ""):
+            return cx
+        return None
+
+    @property
     def search_configured(self) -> bool:
-        return bool(
-            self.SEARCH_API_KEY
-            and self.SEARCH_API_KEY not in ("your-search-api-key-here", "")
-        )
+        """Returns True if any supported search provider has valid credentials."""
+        if self.effective_serper_key:
+            return True
+        if self.effective_brave_key:
+            return True
+        if self.effective_google_search_key and self.effective_google_search_engine_id:
+            return True
+        return False
+
+    @staticmethod
+    def mask_key(key: Optional[str]) -> Optional[str]:
+        """Safely mask credential for diagnostics without exposing secret."""
+        if not key:
+            return None
+        if len(key) <= 8:
+            return "***"
+        return f"{key[:3]}...{key[-4:]}"
+
+    def get_search_provider_diagnostics(self) -> dict:
+        """Returns non-sensitive provider configuration status for health checks & UI."""
+        return {
+            "configured_mode": self.SEARCH_PROVIDER,
+            "has_live_credentials": self.search_configured,
+            "providers": {
+                "serper": {
+                    "available": bool(self.effective_serper_key),
+                    "masked_key": self.mask_key(self.effective_serper_key),
+                    "role": "primary_recommended",
+                },
+                "brave": {
+                    "available": bool(self.effective_brave_key),
+                    "masked_key": self.mask_key(self.effective_brave_key),
+                    "role": "secondary_recommended",
+                },
+                "google_custom": {
+                    "available": bool(self.effective_google_search_key and self.effective_google_search_engine_id),
+                    "masked_key": self.mask_key(self.effective_google_search_key),
+                    "engine_id_configured": bool(self.effective_google_search_engine_id),
+                    "role": "optional_legacy",
+                },
+            },
+        }
 
     @property
     def github_configured(self) -> bool:

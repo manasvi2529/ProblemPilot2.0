@@ -54,6 +54,7 @@ export default function ProjectDetailsPage() {
 
   const [project, setProject] = useState<Project | null>(null);
   const [blueprint, setBlueprint] = useState<any>(null);
+  const [researchIntelligence, setResearchIntelligence] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionResult, setActionResult] = useState<string | null>(null);
@@ -141,6 +142,17 @@ export default function ProjectDetailsPage() {
       setProject(p);
       if (p.blueprint) {
         setBlueprint(p.blueprint);
+        if (p.blueprint.research_intelligence) {
+          setResearchIntelligence(p.blueprint.research_intelligence);
+        }
+      }
+      try {
+        const intelRes = await api.getProjectResearchIntelligence(projectId);
+        if (intelRes && intelRes.has_research) {
+          setResearchIntelligence(intelRes.research_intelligence || intelRes.report);
+        }
+      } catch (iErr) {
+        // Optional research intelligence fetch error
       }
       loadChangeHistory();
       if (chatMessages.length === 0) {
@@ -198,6 +210,10 @@ export default function ProjectDetailsPage() {
   }, [previewStatus, projectId]);
 
   const handleStartServer = async () => {
+    if (!project?.files || project.files.length === 0) {
+      await handleBuildWorkspace(true);
+      return;
+    }
     setIsStartingPreview(true);
     setPreviewError(null);
     try {
@@ -210,7 +226,7 @@ export default function ProjectDetailsPage() {
         setActiveTab('preview');
         await loadPreviewStatus();
       } else {
-        setPreviewStatus('failed');
+        setPreviewStatus(res.not_built ? 'not_started' : 'failed');
         setPreviewError(res.error || 'Server startup failed.');
         await loadPreviewStatus();
       }
@@ -733,11 +749,13 @@ export default function ProjectDetailsPage() {
             <button
               onClick={() => {
                 setActiveTab('preview');
-                if (previewStatus !== 'running') {
+                if ((project.files?.length || 0) === 0) {
+                  handleBuildWorkspace(true);
+                } else if (previewStatus !== 'running') {
                   handleStartServer();
                 }
               }}
-              disabled={isStartingPreview}
+              disabled={isStartingPreview || Boolean(actionLoading)}
               className="btn-press flex items-center gap-1.5 rounded-xl border border-emerald-500/60 bg-gradient-to-r from-emerald-600/40 to-teal-500/30 px-3.5 py-2 text-xs font-bold text-emerald-200 hover:from-emerald-600/60 hover:to-teal-500/40 disabled:opacity-50 shadow-md"
               title="Launch and preview live running website"
             >
@@ -747,6 +765,8 @@ export default function ProjectDetailsPage() {
                   ? `👁 View Website (: ${previewPort})`
                   : isStartingPreview
                   ? 'Booting Sandbox...'
+                  : (project.files?.length || 0) === 0
+                  ? '⚡ Build & Preview'
                   : '▶ Preview Website'}
               </span>
             </button>
@@ -1177,14 +1197,26 @@ export default function ProjectDetailsPage() {
               {/* Right: Action Buttons */}
               <div className="flex flex-wrap items-center gap-2">
                 {previewStatus !== 'running' ? (
-                  <button
-                    onClick={handleStartServer}
-                    disabled={isStartingPreview}
-                    className="btn-press flex items-center gap-1.5 rounded-xl bg-accent-emerald px-3.5 py-1.5 text-xs font-bold text-slate-900 hover:bg-emerald-400 shadow-sm disabled:opacity-50"
-                  >
-                    <Play className="h-3.5 w-3.5 fill-current" />
-                    <span>{isStartingPreview ? 'Booting...' : 'Start Server'}</span>
-                  </button>
+                  (project?.files?.length || 0) === 0 ? (
+                    <button
+                      onClick={() => handleBuildWorkspace(true)}
+                      disabled={Boolean(actionLoading)}
+                      className="btn-press flex items-center gap-1.5 rounded-xl bg-brand-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-brand-500 shadow-sm disabled:opacity-50"
+                      title="Build application workspace before preview"
+                    >
+                      <Hammer className="h-3.5 w-3.5" />
+                      <span>{actionLoading === 'build' ? 'Building...' : 'Build Application'}</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleStartServer}
+                      disabled={isStartingPreview}
+                      className="btn-press flex items-center gap-1.5 rounded-xl bg-accent-emerald px-3.5 py-1.5 text-xs font-bold text-slate-900 hover:bg-emerald-400 shadow-sm disabled:opacity-50"
+                    >
+                      <Play className="h-3.5 w-3.5 fill-current" />
+                      <span>{isStartingPreview ? 'Booting...' : 'Start Server'}</span>
+                    </button>
+                  )
                 ) : (
                   <>
                     <button
@@ -1382,6 +1414,29 @@ export default function ProjectDetailsPage() {
                 <p className="text-xs text-slate-400 max-w-sm mx-auto">
                   Allocating dynamic TCP port, configuring sanitized execution environment, and verifying liveness health check probe.
                 </p>
+              </div>
+            ) : (!project?.files || project.files.length === 0) ? (
+              <div className="text-center py-20 space-y-4 max-w-lg mx-auto">
+                <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/10 border border-amber-500/30 mx-auto flex items-center justify-center text-amber-400 shadow-lg">
+                  <Hammer className="h-8 w-8" />
+                </div>
+                <div className="space-y-2">
+                  <h3 className="text-lg font-bold text-white">Application Not Built Yet</h3>
+                  <p className="text-sm text-slate-300">
+                    Your application has not been built yet. Complete the Build stage before starting Preview.
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    Architecture and blueprint synthesis are complete. Generate full-stack source code into your isolated sandbox to preview live.
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleBuildWorkspace(true)}
+                  disabled={Boolean(actionLoading)}
+                  className="btn-press inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 px-5 py-2.5 text-xs font-bold text-white hover:from-brand-500 hover:to-indigo-500 shadow-md shadow-brand-500/20 disabled:opacity-50"
+                >
+                  <Sparkles className="h-4 w-4 animate-pulse" />
+                  <span>{actionLoading === 'build' ? 'Synthesizing Source Files...' : '⚡ Build Application Workspace Now'}</span>
+                </button>
               </div>
             ) : (
               <div className="text-center py-20 space-y-4 max-w-md mx-auto">
@@ -1894,6 +1949,107 @@ export default function ProjectDetailsPage() {
               </button>
             </div>
           </div>
+
+          {/* Research Intelligence Grounding Panel (Phase 1.6) */}
+          {(blueprint?.research_intelligence || researchIntelligence) && (() => {
+            const intel = blueprint?.research_intelligence || researchIntelligence;
+            return (
+              <div className="rounded-2xl border border-indigo-500/30 bg-gradient-to-br from-indigo-950/30 via-surface-300 to-surface-300 p-5 space-y-4 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1 rounded bg-indigo-500/20 px-2 py-0.5 text-[10px] font-bold text-indigo-300 border border-indigo-500/30">
+                      <Sparkles className="h-3 w-3" />
+                      RESEARCH GROUNDING
+                    </span>
+                    {intel.overall_score && (
+                      <span className="rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
+                        {intel.overall_score}/10 Viability
+                      </span>
+                    )}
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {intel.evidence_sufficiency ? `${intel.evidence_sufficiency.toUpperCase()} EVIDENCE` : ''}
+                    </span>
+                  </div>
+
+                  <Link
+                    href="/research"
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-400 hover:text-brand-300 transition-colors"
+                  >
+                    <span>View Research Hub</span>
+                    <ExternalLink className="h-3 w-3" />
+                  </Link>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* Validated Pain Points Solved */}
+                  <div className="rounded-xl border border-border-subtle bg-surface-400/60 p-3.5 space-y-2">
+                    <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wider block">
+                      Target Pain Points Solved
+                    </span>
+                    <ul className="space-y-1.5">
+                      {(intel.pain_points_addressed || []).slice(0, 3).map((item: any, pIdx: number) => (
+                        <li key={pIdx} className="text-xs text-slate-300 flex items-start gap-1.5">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-semibold text-white">{item.pain_point}</span>
+                            {item.evidence_quote && (
+                              <p className="text-[11px] text-slate-400 italic">"{item.evidence_quote}"</p>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {/* Competitor Gaps & Advantages */}
+                  <div className="rounded-xl border border-border-subtle bg-surface-400/60 p-3.5 space-y-2">
+                    <span className="text-[11px] font-bold text-teal-300 uppercase tracking-wider block">
+                      Competitor Moat & Exploited Gaps
+                    </span>
+                    <ul className="space-y-1.5">
+                      {(intel.competitor_gaps_exploited || []).slice(0, 3).map((gap: any, gIdx: number) => (
+                        <li key={gIdx} className="text-xs text-slate-300 flex items-start gap-1.5">
+                          <div className="h-1.5 w-1.5 rounded-full bg-teal-400 shrink-0 mt-1.5" />
+                          <div>
+                            <span className="font-semibold text-slate-200">{gap.competitor}: </span>
+                            <span className="text-slate-400">{gap.competitor_gap}</span>
+                            {gap.our_advantage && (
+                              <p className="text-[11px] text-teal-300 mt-0.5">
+                                <span className="font-semibold">Advantage:</span> {gap.our_advantage}
+                              </p>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Citations & Evidence Sources */}
+                {intel.citations && intel.citations.length > 0 && (
+                  <div className="pt-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                      Verified Research Citations
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {intel.citations.slice(0, 4).map((c: any, cIdx: number) => (
+                        <a
+                          key={cIdx}
+                          href={c.url || '#'}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg bg-surface-400 hover:bg-surface-200 border border-border-subtle px-2.5 py-1 text-[11px] text-slate-300 hover:text-white transition-colors"
+                        >
+                          <span className="truncate max-w-[200px]">{c.title || c.url}</span>
+                          <ExternalLink className="h-2.5 w-2.5 text-slate-400 shrink-0" />
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {blueprint ? (
             <div className="space-y-6">

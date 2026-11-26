@@ -68,6 +68,56 @@ async def start_preview_server(
     project = await _get_authorized_project(project_id, user, db)
     workspace_dir = WorkspaceBuilder.get_workspace_dir(project.id, project.name)
 
+    # If workspace is empty but project has files persisted in DB, hydrate workspace to disk
+    if not any(workspace_dir.iterdir() if workspace_dir.exists() else []):
+        from backend.models.project import ProjectFile
+        files_res = await db.execute(select(ProjectFile).where(ProjectFile.project_id == project.id))
+        db_files = files_res.scalars().all()
+        if db_files:
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+            for db_f in db_files:
+                f_path = workspace_dir / db_f.path
+                f_path.parent.mkdir(parents=True, exist_ok=True)
+                f_path.write_text(db_f.content, encoding="utf-8")
+        elif project.blueprint:
+            # If no files in DB yet but blueprint exists, synthesize codebase
+            import json
+            from backend.services.website_generator import WebsiteGenerator
+            bp_data = project.blueprint
+            if isinstance(bp_data, str):
+                try:
+                    bp_data = json.loads(bp_data)
+                except Exception:
+                    bp_data = {}
+            if bp_data:
+                generated_files = WebsiteGenerator.generate_codebase(project.name, bp_data)
+                workspace_dir.mkdir(parents=True, exist_ok=True)
+                for f_name, f_content in generated_files.items():
+                    f_path = workspace_dir / f_name
+                    f_path.parent.mkdir(parents=True, exist_ok=True)
+                    f_path.write_text(f_content, encoding="utf-8")
+                    # Also persist to DB
+                    new_pf = ProjectFile(
+                        project_id=project.id,
+                        path=f_name,
+                        content=f_content,
+                        language=f_name.split(".")[-1],
+                        description="",
+                        version=1,
+                    )
+                    db.add(new_pf)
+                project.current_stage = "build"
+                project.status = "in_progress"
+                await db.commit()
+
+    if not any(workspace_dir.iterdir() if workspace_dir.exists() else []):
+        return {
+            "success": False,
+            "status": "not_started",
+            "error": "Your application has not been built yet. Complete the Build stage before starting Preview.",
+            "not_built": True,
+        }
+
     res = await execution_engine.start_project(
         project_id=project.id,
         user_id=user.id,

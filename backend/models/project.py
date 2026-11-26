@@ -19,8 +19,9 @@ class Project(Base):
     # Current stage: discover | architect | build | test | teach | deploy
     current_stage: Mapped[str] = mapped_column(String(30), default="architect")
 
-    # Link to the selected problem
+    # Link to the selected problem and research report
     problem_id: Mapped[str] = mapped_column(String(36), ForeignKey("problem_candidates.id"), nullable=True)
+    research_report_id: Mapped[str] = mapped_column(String(36), ForeignKey("research_reports.id"), nullable=True, index=True)
 
     # Blueprint stored as JSON
     blueprint: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -52,6 +53,7 @@ class Project(Base):
     owner = relationship("User", back_populates="projects")
     files = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan")
     problem = relationship("ProblemCandidate", back_populates="project")
+    research_report = relationship("ResearchReport", foreign_keys=[research_report_id])
 
     def to_dict(self):
         # Derive stage dynamically if not set
@@ -70,12 +72,14 @@ class Project(Base):
 
         return {
             "id": self.id,
+            "owner_id": self.owner_id,
             "name": self.name,
             "title": self.name,
             "description": self.description,
             "status": self.status,
             "current_stage": stage,
             "problem_id": self.problem_id,
+            "research_report_id": getattr(self, "research_report_id", None),
             "blueprint": self.blueprint or {},
             "tech_stack": self.tech_stack or {},
             "architecture": self.architecture or {},
